@@ -1,0 +1,35 @@
+{
+  "name": "koishi-plugin-winefox-daily",
+  "version": "2.0.0",
+  "description": "酒狐悄悄话增强版 - 基于 Koishi 的智能语录机器人插件，包含时间感知、好感度系统、节日检测、分类查询等功能",
+  "main": "index.js",
+  "keywords": [
+    "koishi",
+    "plugin",
+    "onebot",
+    "qq",
+    "bot",
+    "winefox",
+    "酒狐",
+    "语录",
+    "quotes"
+  ],
+  "author": "KanameMadoka520",
+  "license": "MIT",
+  "koishi": {
+    "description": "酒狐悄悄话增强版 🦊 智能语录系统",
+    "service": {
+      "required": [],
+      "optional": []
+    }
+  },
+  "peerDependencies": {
+    "koishi": "^4.0.0"
+  },
+  "files": [
+    "index.js",
+    "lib/",
+    "data/",
+    "memory/"
+  ]
+}
