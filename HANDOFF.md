@@ -1,8 +1,8 @@
-# 交接文档 - 酒狐日常 v2.2
+# 交接文档 - 酒狐日常 v2.3
 
-> **最后更新**: 2026-03-07
-> **当前状态**: v2.2 全部开发工作已完成（代码审查+问题排查+数据扩充+实测Bug修复），仅剩实机测试
-> **版本号**: 2.2.0
+> **最后更新**: 2026-03-09
+> **当前状态**: v2.3 经济体系重设计已完成，待实机测试与提交流程整理
+> **版本号**: 2.3.0
 
 ---
 
@@ -215,38 +215,65 @@
 1. **戳一戳无响应**: `lib/passive.js` 使用了错误的事件名 `ctx.on('notice/poke', ...)` — 这是 OneBot v11 原始路径，Koishi v4 adapter-onebot 不会以此名称分发事件，导致监听器永远不触发。修复为 `ctx.platform('onebot').on('notice', ...)` + `session.subtype === 'poke'` 过滤；同时补充了 debug/info 级别日志、为 `session.send()` 添加 await
 2. **关键词冒泡无调试日志+选词不公平**: 关键词中间件原本只有1条成功日志，检测/概率失败/无匹配全部静默；且 `break` 逻辑导致每次只尝试 `Object.entries()` 插入顺序中第一个命中的关键词（通常是低概率词）。修复为：扫描所有命中关键词后随机选一个判定，并在每个决策分支补充 debug 日志
 
+### v2.3 经济体系重设计（进行中）
+
+> 详细设计文档见 `/root/.claude/plans/ancient-pondering-bachman.md`
+
+**核心改动**: 双货币体系(好感度+狐狐券) + 10级好感 + 好感下降机制 + 委托系统 + 装备机制效果
+
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| Phase 0 | 数据层基础改造 (affinity.js 10级+狐狐券+removePoints+formatProgressLine, responses.js) | ✅ 完成 |
+| Phase 1 | 商店与酿酒改为狐狐券 (shop_items.js 30件, shop.js, brewing) | ✅ 完成 |
+| Phase 2 | 狐狐券产出 (全系统接入 addTickets) | ✅ 完成 |
+| Phase 3 | 好感下降机制 (答错-1/过期-3/骚扰-2含警告) | ✅ 完成 |
+| Phase 4 | 等级门控 + 每日免费指令 (daily-free.js, 帮助菜单改造) | ✅ 完成（最小闭环） |
+| Phase 5 | 委托系统 (commission.js + commission_data.js) | ✅ 完成（最小闭环） |
+| Phase 6 | 装备机制效果集成 (14种bonus type接入各系统) | ✅ 完成（核心闭环） |
+| Phase 7 | 进度播报 + 收尾打磨 | ✅ 完成 |
+
+**Phase 0 已完成的改动**:
+- `lib/affinity.js`: AFFINITY_LEVELS 6级→10级(封顶500)，新增 LEVEL_UNLOCKS 映射，新增 tickets 字段+addTickets/spendTickets/removePoints/formatProgressLine 方法，衰减从×5改为×3，删除 spendPoints
+- `data/responses.js`: levelUpLines 扩展到1-9，memoirLines 扩展到0-9
+
+**Phase 1 已完成的核心改动**:
+- `data/shop_items.js`: 商店物品 18件→30件（15装备+15消耗品），价格统一改为狐狐券，新增 `levelRequired` / `bonus` / 新 effect 字段
+- `lib/shop.js`: 商店显示按等级分层，购买前检查等级门槛，新增 `getEquippedBonus(userId, bonusType)` API
+- `data/brewing_recipes.js`: 配方 `cost` 文案语义改为消耗狐狐券
+- `index.js`: `酒狐商店` 按用户等级展示，`酒狐购买` / `酒狐酿酒` 扣费改为 `spendTickets`
+
+**Phase 7 已完成的改动**:
+- `index.js`: 在主指令 / 每日酒狐 / 猜拳 / 猜数 / 抽签 / 故事 / 问答答对 / 变质惩罚 / 开瓶成功 等关键路径追加 `formatProgressLine()` 进度播报
+- `package.json`: 版本号更新为 `2.3.0`
+- `HANDOFF.md`: v2.3 全部 7 个阶段状态同步为完成
+
 ---
 
 ## 八、待办事项（给下一次会话）
 
-> **当前优先级**: 实机测试 -> 修复问题
+> **当前优先级**: v2.3 实机测试 -> 提交/推送整理
 
 ### 已完成
 
 1. **代码审查**: v2.2 全部模块已审查，Critical/Important 问题已修复
-2. **潜在问题排查**: 4项全部排查完毕，结论如下：
-   - `lib/quiz.js` vs 猜数字中间件 -- **无冲突**（正则不重叠 + 指令层互斥保护）
-   - `lib/brewing.js` 好感扣除时序 -- **正确**（两阶段提交：验证→扣费→确认）
-   - `lib/shop.js` `_save()` 调用时机 -- **正确**（同上两阶段提交模式）；已修复余额不足提示未显示当前好感度的问题
-   - `lib/interactions.js` 冷却存内存 -- **可接受**（1小时冷却无需持久化，重启重置是合理的）
-3. **题库扩充**: quiz_data.js 从 50题 扩充到 100题（4分类各25题）
-4. **酿酒配方扩充**: brewing_recipes.js 从 8种 扩充到 14种，新增樱花清酒、雪域冰酿、蘑菇岛特酿、海洋之心酒、幽匿回响酒、紫水晶气泡酒，覆盖了极品~传说品质区间
-5. **商店物品扩充**: shop_items.js 从 10件 扩充到 18件（装备5→9，消耗品5→9），新增手链/小眼镜/发簪/星光披风 + 南瓜派/唱片·猫/金苹果/迷之药水，价格梯度从5到50
-6. **戳一戳Bug修复**: `lib/passive.js` 事件监听从错误的 `notice/poke` 改为 `ctx.platform('onebot').on('notice', ...)` + subtype 过滤，补充调试日志
-7. **关键词冒泡修复**: 改为扫描全部命中关键词后随机选一个判定（原逻辑固定取第一个），补充完整的 debug 日志链路
+2. **潜在问题排查**: 4项全部排查完毕
+3. **题库扩充**: quiz_data.js 50→100题
+4. **酿酒配方扩充**: brewing_recipes.js 8→14种
+5. **商店物品扩充**: shop_items.js 10→18件
+6. **戳一戳Bug修复**: 事件监听改为正确的 OneBot notice + poke subtype
+7. **关键词冒泡修复**: 扫描全部命中关键词后随机选一个，补充调试日志
+8. **v2.3 Phase 0**: 好感度系统核心重构(10级+狐狐券+进度播报)
+9. **v2.3 Phase 1 核心**: 商店/酿酒切换到狐狐券，30件商品数据与商店等级门槛 API 完成
 
 ### 待做
 
-1. **实机测试**: 在 Koishi 环境中加载插件，验证所有新旧指令正常运行
-2. **后续可选优化**:
-   - 题库可继续扩充（当前100题）
-   - 可根据玩家反馈调整商店物品价格和效果
-3. **数据存储迁移（用户超过1万人时）**: 当前所有用户数据按功能存储在 `memory/*.json` 文件中（如 affinity.json、checkin.json 等），每个文件包含全部用户数据，以 userId 为 key。该方案在几千用户内性能无忧，但若用户超过1万人，应迁移至 Koishi 内置数据库服务（SQLite/MySQL），不要改为按用户分文件
+1. **实机测试**: 在 Koishi 环境完整验证 v2.3 的双货币、10级好感、委托、每日免费指令、装备机制效果、进度播报等是否全部正常
+2. **提交流程整理**: 确认主工作区与 worktree 需要保留/合并/推送的改动范围
+3. **数据存储迁移（用户超过1万人时）**: 迁移至 Koishi 内置数据库
 
 ### 不做
 
 - 酒狐传话（消息代转）-- 明确不做
-- 酒狐委托 -- 保持预留占位
 
 ---
 
