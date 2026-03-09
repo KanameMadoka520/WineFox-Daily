@@ -28,6 +28,7 @@ const { registerPassive, getTodayPassiveCount } = require('./lib/passive')
 const SubmissionSystem = require('./lib/submission')
 const { registerSearchCommands } = require('./lib/search')
 const { registerAnalyticsCommands } = require('./lib/analytics')
+const { hasPuppeteer, renderFortuneCard, renderAffinityCard } = require('./lib/card-renderer')
 
 // v2 模块
 const FortuneSystem = require('./lib/fortune')
@@ -53,6 +54,8 @@ exports.usage = `
 
 一只可爱的酒狐女仆，随时随地为主人送上暖心悄悄话。
 
+已支持为「酒狐占卜」「酒狐好感」优先输出图片卡片；未启用浏览器服务或渲染失败时会自动回退文字。
+
 使用「酒狐帮助」查看完整指令列表。
 `.trim()
 
@@ -63,6 +66,10 @@ exports.Config = Schema.object({
   passiveCooldown: Schema.number().default(600000).description('群聊被动触发冷却时间（毫秒）'),
   rareDropChance: Schema.number().min(0).max(1).default(0.05).description('稀有语录掉落概率 (0~1)'),
   dailyAffinityMax: Schema.number().default(20).description('每日好感度获取上限'),
+  // === 图片输出 ===
+  imageFortune: Schema.boolean().default(true).description('是否为酒狐占卜优先输出图片卡片'),
+  imageAffinity: Schema.boolean().default(true).description('是否为酒狐好感优先输出图片卡片'),
+  imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
   // === 心情 ===
   enableMoodDecorate: Schema.boolean().default(true).description('是否启用心情修饰语录'),
   moodDecorateChance: Schema.number().min(0).max(1).default(0.4).description('心情修饰词出现概率 (0~1)'),
@@ -313,11 +320,26 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐好感 =====
   ctx.command('酒狐好感', '查看与酒狐的好感度')
-    .action(({ session }) => {
+    .action(async ({ session }) => {
       const status = affinity.getStatus(session.userId)
-      const lines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `进度：${status.progress}`]
-      if (status.nextLevel) lines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
-      return lines.join('\n')
+      const textLines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `进度：${status.progress}`]
+      if (status.nextLevel) textLines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
+      const textOutput = textLines.join('\n')
+
+      if (!finalConfig.imageAffinity || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderAffinityCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          status,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐好感图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 好感卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐图鉴 =====
@@ -368,7 +390,23 @@ exports.apply = (ctx, config = {}) => {
   ctx.command('酒狐占卜', '今日运势占卜')
     .action(async ({ session }) => {
       await trackAndNotify(session, 'fortune')
-      return fortune.getTodayFortune(session.userId)
+      const fortuneData = fortune.getTodayFortuneData(session.userId)
+      const textOutput = fortune.formatFortuneText(fortuneData)
+
+      if (!finalConfig.imageFortune || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderFortuneCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          data: fortuneData,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐占卜图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 占卜卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐心情 =====
