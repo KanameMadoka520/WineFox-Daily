@@ -16,6 +16,7 @@
 
 const path = require('path')
 const fs = require('fs')
+const { Schema } = require('koishi')
 const responseData = require('./data/responses')
 
 // lib 模块
@@ -83,6 +84,10 @@ exports.Config = Schema.object({
   imageCheckinResult: Schema.boolean().default(true).description('是否为酒狐签到成功优先输出结果卡片'),
   imageBuyResult: Schema.boolean().default(true).description('是否为酒狐购买成功优先输出结果卡片'),
   imageGiftResult: Schema.boolean().default(true).description('是否为酒狐送礼成功优先输出结果卡片'),
+  imageStory: Schema.boolean().default(true).description('是否为酒狐故事优先输出图片卡片'),
+  imageStoryCatalog: Schema.boolean().default(true).description('是否为酒狐故事目录优先输出图片卡片'),
+  imageWeather: Schema.boolean().default(true).description('是否为酒狐天气优先输出图片卡片'),
+  imageMood: Schema.boolean().default(true).description('是否为酒狐心情优先输出图片卡片'),
   imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
   // === 心情 ===
   enableMoodDecorate: Schema.boolean().default(true).description('是否启用心情修饰语录'),
