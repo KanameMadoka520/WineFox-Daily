@@ -29,7 +29,7 @@ const { registerPassive, getTodayPassiveCount } = require('./lib/passive')
 const SubmissionSystem = require('./lib/submission')
 const { registerSearchCommands } = require('./lib/search')
 const { registerAnalyticsCommands, formatAnalyticsText } = require('./lib/analytics')
-const { hasPuppeteer, renderFortuneCard, renderAffinityCard, renderCheckinCalendarCard, renderMemoirCard, renderAnalyticsCard, renderShopCard, renderInventoryCard, renderEquipResultCard, renderUseResultCard, renderHelpCard, renderRareCollectionCard, renderRankingCard, renderAchievementCard, renderCheckinResultCard, renderBuyResultCard, renderGiftResultCard } = require('./lib/card-renderer')
+const { hasPuppeteer, renderFortuneCard, renderAffinityCard, renderCheckinCalendarCard, renderMemoirCard, renderAnalyticsCard, renderShopCard, renderInventoryCard, renderEquipResultCard, renderUseResultCard, renderHelpCard, renderRareCollectionCard, renderRankingCard, renderAchievementCard, renderStoryCards, renderStoryCatalogCard, renderWeatherCard, renderMoodCard, renderCheckinResultCard, renderBuyResultCard, renderGiftResultCard } = require('./lib/card-renderer')
 
 // v2 模块
 const FortuneSystem = require('./lib/fortune')
@@ -564,7 +564,29 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐心情 =====
   ctx.command('酒狐心情', '查看酒狐当前心情')
-    .action(() => mood.getStatusText())
+    .action(async () => {
+      const moodInfo = mood.getMood()
+      const textOutput = mood.getStatusText()
+
+      if (!finalConfig.imageMood || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderMoodCard(ctx, {
+          data: {
+            title: '酒狐心情',
+            mood: moodInfo.name,
+            emoji: moodInfo.emoji,
+            body: textOutput,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐心情图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 心情卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐猜拳 =====
   ctx.command('酒狐猜拳 <choice:text>', '和酒狐猜拳')
@@ -612,19 +634,58 @@ exports.apply = (ctx, config = {}) => {
 
       if (category && category.trim()) {
         const catName = story.findCategory(category.trim())
-        if (catName) {
-          const text = await story.getStoryByCategory(catName)
-          return text || '这个分类暂时没有故事了...'
+        if (!catName) {
+          return `没有找到「${category.trim()}」这个分类...用「酒狐故事目录」看看有哪些吧！`
         }
-        return `没有找到「${category.trim()}」这个分类...用「酒狐故事目录」看看有哪些吧！`
+
+        const storyData = await story.getStoryDataByCategory(catName)
+        const textOutput = storyData?.text || '这个分类暂时没有故事了...'
+        if (!storyData || !finalConfig.imageStory || !hasPuppeteer(ctx)) {
+          return textOutput
+        }
+
+        try {
+          return await renderStoryCards(ctx, { data: storyData })
+        } catch (err) {
+          logger.warn('[fox] 酒狐故事图片渲染失败', err)
+          if (finalConfig.imageFallbackToText) return textOutput
+          return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
+        }
       }
 
-      return await story.getRandomStory()
+      const storyData = await story.getRandomStoryData()
+      const textOutput = storyData.text
+      if (!finalConfig.imageStory || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderStoryCards(ctx, { data: storyData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐故事图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐故事目录 =====
   ctx.command('酒狐故事目录', '查看故事分类列表')
-    .action(() => story.getCategoryList())
+    .action(async () => {
+      const catalogData = story.getCatalogData()
+      const textOutput = story.getCategoryList()
+
+      if (!finalConfig.imageStoryCatalog || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderStoryCatalogCard(ctx, { data: catalogData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐故事目录图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 故事目录卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐问答 =====
   ctx.command('酒狐问答', 'MC知识问答')
@@ -1003,7 +1064,32 @@ exports.apply = (ctx, config = {}) => {
       await trackAndNotify(session, 'interact')
       const weatherData = weather.getWeather()
       if (mood && weatherData.moodEffect) mood.onEvent('interact')
-      return weather.getReport()
+      const textOutput = weather.getReport()
+      const periodMap = {
+        latenight: '深夜', dawn: '清晨', morning: '上午',
+        noon: '中午', afternoon: '下午', evening: '傍晚', night: '夜晚',
+      }
+      const periodKey = require('./lib/utils').getTimePeriod()
+
+      if (!finalConfig.imageWeather || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderWeatherCard(ctx, {
+          data: {
+            title: '酒狐天气',
+            status: weatherData.name,
+            period: periodMap[periodKey] || '未知',
+            body: weatherData.description,
+            foxComment: weatherData.foxComment,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐天气图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 天气卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐委托(预留) =====
