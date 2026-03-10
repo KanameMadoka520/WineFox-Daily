@@ -88,6 +88,9 @@ exports.Config = Schema.object({
   imageStoryCatalog: Schema.boolean().default(true).description('是否为酒狐故事目录优先输出图片卡片'),
   imageWeather: Schema.boolean().default(true).description('是否为酒狐天气优先输出图片卡片'),
   imageMood: Schema.boolean().default(true).description('是否为酒狐心情优先输出图片卡片'),
+  imageCellar: Schema.boolean().default(true).description('是否为酒狐酒窖优先输出图片卡片'),
+  imageBrewResult: Schema.boolean().default(true).description('是否为酒狐酿酒成功优先输出结果卡片'),
+  imageOpenBottleResult: Schema.boolean().default(true).description('是否为酒狐开瓶成功优先输出结果卡片'),
   imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
   // === 心情 ===
   enableMoodDecorate: Schema.boolean().default(true).description('是否启用心情修饰语录'),
