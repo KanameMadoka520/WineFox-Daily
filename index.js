@@ -29,7 +29,7 @@ const { registerPassive, getTodayPassiveCount } = require('./lib/passive')
 const SubmissionSystem = require('./lib/submission')
 const { registerSearchCommands } = require('./lib/search')
 const { registerAnalyticsCommands, formatAnalyticsText } = require('./lib/analytics')
-const { hasPuppeteer, renderFortuneCard, renderAffinityCard, renderCheckinCalendarCard, renderMemoirCard, renderAnalyticsCard, renderShopCard, renderInventoryCard, renderEquipResultCard, renderUseResultCard, renderHelpCard, renderRareCollectionCard, renderRankingCard, renderAchievementCard, renderStoryCards, renderStoryCatalogCard, renderWeatherCard, renderMoodCard, renderCheckinResultCard, renderBuyResultCard, renderGiftResultCard } = require('./lib/card-renderer')
+const { hasPuppeteer, renderFortuneCard, renderAffinityCard, renderCheckinCalendarCard, renderMemoirCard, renderAnalyticsCard, renderShopCard, renderInventoryCard, renderEquipResultCard, renderUseResultCard, renderHelpCard, renderRareCollectionCard, renderRankingCard, renderAchievementCard, renderCellarCard, renderBrewResultCard, renderOpenBottleResultCard, renderStoryCards, renderStoryCatalogCard, renderWeatherCard, renderMoodCard, renderCheckinResultCard, renderBuyResultCard, renderGiftResultCard } = require('./lib/card-renderer')
 
 // v2 模块
 const FortuneSystem = require('./lib/fortune')
@@ -753,12 +753,41 @@ exports.apply = (ctx, config = {}) => {
         }
       }
       await brewing.confirmBrewing(session.userId, result._recipeName)
-      return result.message
+
+      const textOutput = result.message
+      if (!finalConfig.imageBrewResult || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderBrewResultCard(ctx, {
+          data: brewing.getBrewResultCardData(result),
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐酿酒结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 酿酒结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐酒窖 =====
   ctx.command('酒狐酒窖', '查看酿酒进度')
-    .action(({ session }) => brewing.getCellar(session.userId))
+    .action(({ session }) => {
+      const textOutput = brewing.getCellar(session.userId)
+      if (!finalConfig.imageCellar || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return renderCellarCard(ctx, {
+          data: brewing.getCellarCardData(session.userId),
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐酒窖图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 酒窖卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐开瓶 =====
   ctx.command('酒狐开瓶', '品尝酿好的酒')
@@ -770,7 +799,22 @@ exports.apply = (ctx, config = {}) => {
         if (result.quality === '传说') await trackAndNotify(session, 'brew_legendary')
         mood.onEvent('tipsy')
       }
-      return result.message
+
+      if (!result.success) return result.message
+      const textOutput = result.message
+      if (!finalConfig.imageOpenBottleResult || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderOpenBottleResultCard(ctx, {
+          data: brewing.getOpenBottleResultCardData(result),
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐开瓶结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 开瓶结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐商店 =====
