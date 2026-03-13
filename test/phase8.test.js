@@ -44,6 +44,15 @@ async function testOmikujiCarriesText() {
   assert.ok(result.text, '御神签结果应包含签文正文')
 }
 
+async function testRpsCarriesCardFields() {
+  const GamesSystem = require('../lib/games')
+  const games = new GamesSystem(console)
+  const result = games.playRPS('石头')
+  assert.ok(result.userChoiceName, '猜拳结果应包含用户出拳名称')
+  assert.ok(result.foxChoiceName, '猜拳结果应包含酒狐出拳名称')
+  assert.ok(result.flavorLine, '猜拳结果应包含结果文案')
+}
+
 async function testSearchWithMetaAndStats() {
   const QuotesLoader = require('../lib/quotes-loader')
   const tmpFile = '/tmp/wf_phase8_quotes.txt'
@@ -66,6 +75,7 @@ async function main() {
     ['commission data', testCommissionData],
     ['favorites pagination data', testFavoritesDataPagination],
     ['omikuji carries text', testOmikujiCarriesText],
+    ['rps carries card fields', testRpsCarriesCardFields],
     ['search with meta and stats', testSearchWithMetaAndStats],
   ]
 

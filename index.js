@@ -63,6 +63,7 @@ const {
   renderCheckinResultCard,
   renderBuyResultCard,
   renderGiftResultCard,
+  renderRpsWinResultCard,
   renderDailyQuoteCard,
   renderOmikujiCard,
 } = require('./lib/card-renderer')
@@ -122,6 +123,7 @@ exports.Config = Schema.object({
   imageSearch: Schema.boolean().default(true).description('是否为酒狐搜索优先输出图片卡片'),
   imageDailyQuote: Schema.boolean().default(true).description('是否为每日酒狐优先输出图片卡片'),
   imageOmikuji: Schema.boolean().default(true).description('是否为酒狐抽签优先输出图片卡片'),
+  imageRpsWinResult: Schema.boolean().default(true).description('是否为酒狐猜拳胜利优先输出结果卡片'),
   imageCategory: Schema.boolean().default(true).description('是否为酒狐分类优先输出图片卡片'),
   imageQuoteStats: Schema.boolean().default(true).description('是否为酒狐总数优先输出图片卡片'),
   imageEquipResult: Schema.boolean().default(true).description('是否为酒狐装备成功优先输出结果卡片'),
@@ -838,16 +840,37 @@ exports.apply = (ctx, config = {}) => {
         const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
         await affinity.addPoints(session.userId, result.affinityBonus + affinityBonus, { dailyCapBonus, decayImmune })
       }
+      mood.onEvent(result.result === 'win' ? 'game_lose' : result.result === 'lose' ? 'game_win' : 'interact')
+      const progressDelta = result.affinityBonus > 0 ? result.affinityBonus + (shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')) : 0
       if (result.result === 'win') {
         const ticketResult = await affinity.addTickets(session.userId, 2)
         ticketLine = `\n狐狐券 +2 (当前 ${ticketResult.newTickets} 张)`
         await trackAndNotify(session, 'rps_win')
         await trackCommission(session, 'rps_win')
+
+        const progressLine = progressDelta > 0 ? affinity.formatProgressLine(session.userId, progressDelta) : ''
+        const textOutput = result.message + ticketLine + (progressLine ? `\n${progressLine}` : '')
+        return renderImageFeature({
+          feature: '酒狐猜拳胜利结果',
+          imageKey: 'imageRpsWinResult',
+          imageEnabled: finalConfig.imageRpsWinResult,
+          textOutput,
+          detail: `userChoice=${result.userChoiceName} foxChoice=${result.foxChoiceName}`,
+          render: () => renderRpsWinResultCard(ctx, {
+            data: {
+              userChoiceName: result.userChoiceName,
+              foxChoiceName: result.foxChoiceName,
+              flavorLine: result.flavorLine,
+              ticketReward: 2,
+              progressLine,
+              message: result.message,
+            },
+          }),
+          fallbackMessage: '酒狐悄悄话: 猜拳胜利结果卡片生成失败了，请稍后再试一次...',
+        })
       } else {
         await trackAndNotify(session, 'rps_play')
       }
-      mood.onEvent(result.result === 'win' ? 'game_lose' : result.result === 'lose' ? 'game_win' : 'interact')
-      const progressDelta = result.affinityBonus > 0 ? result.affinityBonus + (shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')) : 0
       return result.message + ticketLine + (progressDelta > 0 ? `\n${affinity.formatProgressLine(session.userId, progressDelta)}` : '')
     })
 

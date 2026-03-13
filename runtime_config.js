@@ -69,6 +69,7 @@ module.exports = {
   imageSearch: true,
   imageDailyQuote: true,
   imageOmikuji: true,
+  imageRpsWinResult: true,
   imageCategory: true,
   imageQuoteStats: true,
   imageEquipResult: true,
