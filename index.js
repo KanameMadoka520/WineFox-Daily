@@ -148,6 +148,11 @@ exports.Config = Schema.object({
 exports.apply = (ctx, config = {}) => {
   const logger = ctx.logger('fox')
 
+  function logImageCheck(feature, options = {}) {
+    const parts = Object.entries(options).map(([key, value]) => `${key}=${value}`)
+    logger.info(`[fox] ${feature} 图片条件 ${parts.join(' ')}`)
+  }
+
   // ===== 路径初始化 =====
   const dataDir = path.join(__dirname, 'data')
   const memoryDir = path.join(__dirname, 'memory')
@@ -170,6 +175,8 @@ exports.apply = (ctx, config = {}) => {
   }
 
   const finalConfig = Object.assign({}, config, runtimeConfig)
+
+  logger.info(`[fox] Puppeteer 服务可用: ${hasPuppeteer(ctx)}`)
 
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
   if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true })
@@ -428,14 +435,25 @@ exports.apply = (ctx, config = {}) => {
         helpData.footer,
       ].join('\n')
 
-      if (!finalConfig.imageHelp || !hasPuppeteer(ctx)) {
+      const puppeteerAvailable = hasPuppeteer(ctx)
+      logImageCheck('酒狐帮助', {
+        imageHelp: !!finalConfig.imageHelp,
+        puppeteerAvailable,
+      })
+
+      if (!finalConfig.imageHelp || !puppeteerAvailable) {
+        logger.info(`[fox] 酒狐帮助回退文字输出 reason=${!finalConfig.imageHelp ? 'image_help_disabled' : 'puppeteer_unavailable'}`)
         return textOutput
       }
 
       try {
-        return await renderHelpCard(ctx, { data: helpData })
+        logger.info('[fox] 酒狐帮助开始图片渲染')
+        const rendered = await renderHelpCard(ctx, { data: helpData })
+        logger.info('[fox] 酒狐帮助图片渲染成功')
+        return rendered
       } catch (err) {
         logger.warn('[fox] 酒狐帮助图片渲染失败', err)
+        logger.info('[fox] 酒狐帮助回退文字输出 reason=render_failed')
         if (finalConfig.imageFallbackToText) return textOutput
         return '酒狐悄悄话: 帮助菜单卡片生成失败了，请稍后再试一次...'
       }
@@ -778,6 +796,7 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐故事 =====
   ctx.command('酒狐故事 [category:text]', '酒狐的冒险日记')
     .action(async ({ session }, category) => {
+      logger.info('[fox] 酒狐故事请求开始')
       await affinity.addPoints(session.userId, 1)
       const ticketResult = await affinity.addTickets(session.userId, 1)
       await trackAndNotify(session, 'story')
@@ -791,14 +810,21 @@ exports.apply = (ctx, config = {}) => {
 
         const storyData = await story.getStoryDataByCategory(catName)
         const textOutput = (storyData?.text || '这个分类暂时没有故事了...') + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
-        if (!storyData || !finalConfig.imageStory || !hasPuppeteer(ctx)) {
+        const puppeteerAvailable = hasPuppeteer(ctx)
+        logger.info(`[fox] 酒狐故事图片条件 hasStoryData=${!!storyData} imageStory=${!!finalConfig.imageStory} puppeteerAvailable=${puppeteerAvailable} mode=category category=${catName}`)
+        if (!storyData || !finalConfig.imageStory || !puppeteerAvailable) {
+          logger.info(`[fox] 酒狐故事回退文字输出 reason=${!storyData ? 'missing_story_data' : !finalConfig.imageStory ? 'image_story_disabled' : 'puppeteer_unavailable'} mode=category category=${catName}`)
           return textOutput
         }
 
         try {
-          return await renderStoryCards(ctx, { data: storyData })
+          logger.info(`[fox] 酒狐故事开始图片渲染 mode=category category=${catName}`)
+          const rendered = await renderStoryCards(ctx, { data: storyData })
+          logger.info(`[fox] 酒狐故事图片渲染成功 mode=category category=${catName}`)
+          return rendered
         } catch (err) {
           logger.warn('[fox] 酒狐故事图片渲染失败', err)
+          logger.info(`[fox] 酒狐故事回退文字输出 reason=render_failed mode=category category=${catName}`)
           if (finalConfig.imageFallbackToText) return textOutput
           return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
         }
@@ -806,14 +832,21 @@ exports.apply = (ctx, config = {}) => {
 
       const storyData = await story.getRandomStoryData()
       const textOutput = `${storyData.text}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
-      if (!finalConfig.imageStory || !hasPuppeteer(ctx)) {
+      const puppeteerAvailable = hasPuppeteer(ctx)
+      logger.info(`[fox] 酒狐故事图片条件 hasStoryData=${!!storyData} imageStory=${!!finalConfig.imageStory} puppeteerAvailable=${puppeteerAvailable} mode=random`)
+      if (!finalConfig.imageStory || !puppeteerAvailable) {
+        logger.info(`[fox] 酒狐故事回退文字输出 reason=${!finalConfig.imageStory ? 'image_story_disabled' : 'puppeteer_unavailable'} mode=random`)
         return textOutput
       }
 
       try {
-        return await renderStoryCards(ctx, { data: storyData })
+        logger.info('[fox] 酒狐故事开始图片渲染 mode=random')
+        const rendered = await renderStoryCards(ctx, { data: storyData })
+        logger.info('[fox] 酒狐故事图片渲染成功 mode=random')
+        return rendered
       } catch (err) {
         logger.warn('[fox] 酒狐故事图片渲染失败', err)
+        logger.info('[fox] 酒狐故事回退文字输出 reason=render_failed mode=random')
         if (finalConfig.imageFallbackToText) return textOutput
         return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
       }
@@ -825,14 +858,26 @@ exports.apply = (ctx, config = {}) => {
       const catalogData = story.getCatalogData()
       const textOutput = story.getCategoryList()
 
-      if (!finalConfig.imageStoryCatalog || !hasPuppeteer(ctx)) {
+      const puppeteerAvailable = hasPuppeteer(ctx)
+      logImageCheck('酒狐故事目录', {
+        imageStoryCatalog: !!finalConfig.imageStoryCatalog,
+        puppeteerAvailable,
+        hasCatalogData: !!catalogData,
+      })
+
+      if (!finalConfig.imageStoryCatalog || !puppeteerAvailable) {
+        logger.info(`[fox] 酒狐故事目录回退文字输出 reason=${!finalConfig.imageStoryCatalog ? 'image_story_catalog_disabled' : 'puppeteer_unavailable'}`)
         return textOutput
       }
 
       try {
-        return await renderStoryCatalogCard(ctx, { data: catalogData })
+        logger.info('[fox] 酒狐故事目录开始图片渲染')
+        const rendered = await renderStoryCatalogCard(ctx, { data: catalogData })
+        logger.info('[fox] 酒狐故事目录图片渲染成功')
+        return rendered
       } catch (err) {
         logger.warn('[fox] 酒狐故事目录图片渲染失败', err)
+        logger.info('[fox] 酒狐故事目录回退文字输出 reason=render_failed')
         if (finalConfig.imageFallbackToText) return textOutput
         return '酒狐悄悄话: 故事目录卡片生成失败了，请稍后再试一次...'
       }
