@@ -153,6 +153,17 @@ exports.apply = (ctx, config = {}) => {
     logger.info(`[fox] ${feature} 图片条件 ${parts.join(' ')}`)
   }
 
+  function logFeatureTrigger(session, label, extra = {}) {
+    const base = {
+      feature: label,
+      user: session?.userId || 'unknown',
+      guild: session?.guildId || 'private',
+      platform: session?.platform || 'unknown',
+    }
+    const parts = Object.entries({ ...base, ...extra }).map(([key, value]) => `${key}=${JSON.stringify(String(value))}`)
+    logger.info(`[fox] 功能触发 ${parts.join(' ')}`)
+  }
+
   // ===== 路径初始化 =====
   const dataDir = path.join(__dirname, 'data')
   const memoryDir = path.join(__dirname, 'memory')
@@ -177,6 +188,21 @@ exports.apply = (ctx, config = {}) => {
   const finalConfig = Object.assign({}, config, runtimeConfig)
 
   logger.info(`[fox] Puppeteer 服务可用: ${hasPuppeteer(ctx)}`)
+
+  ctx.middleware((session, next) => {
+    const content = (session.content || '').trim()
+    const isWineFoxCommand = content === '每日酒狐'
+      || content.startsWith('每日酒狐 ')
+      || content === '酒狐'
+      || content.startsWith('酒狐')
+
+    if (isWineFoxCommand) {
+      const command = content.split(/\s+/)[0] || content
+      logFeatureTrigger(session, command, { content })
+    }
+
+    return next()
+  }, true)
 
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
   if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true })
@@ -906,6 +932,7 @@ exports.apply = (ctx, config = {}) => {
 
     const result = await quiz.answer(sessionKey, text)
     if (!result.answered) return next()
+    logger.info(`[fox] 酒狐问答作答 user=${session.userId} guild=${session.guildId || 'private'} answer=${text.toUpperCase()} correct=${!!result.correct}`)
 
     if (result.correct) {
       await affinity.addPoints(session.userId, result.reward)
@@ -931,6 +958,7 @@ exports.apply = (ctx, config = {}) => {
 
     const num = parseInt(text, 10)
     const result = games.playGuessNumber(sessionKey, num)
+    logger.info(`[fox] 酒狐猜数作答 user=${session.userId} guild=${session.guildId || 'private'} guess=${num} finished=${!!result.finished} reward=${result.affinityBonus || 0}`)
     if (result.finished && result.affinityBonus > 0) {
       const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
       const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
