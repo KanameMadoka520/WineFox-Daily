@@ -35,6 +35,11 @@ const {
   resolveCardTheme,
   setCardTheme,
   getActiveCardThemeInfo,
+  renderCommissionCard,
+  renderFavoritesCard,
+  renderSearchResultCard,
+  renderCategoryListCard,
+  renderQuoteStatsCard,
   renderFortuneCard,
   renderAffinityCard,
   renderCheckinCalendarCard,
@@ -58,6 +63,8 @@ const {
   renderCheckinResultCard,
   renderBuyResultCard,
   renderGiftResultCard,
+  renderDailyQuoteCard,
+  renderOmikujiCard,
 } = require('./lib/card-renderer')
 
 // v2 模块
@@ -110,6 +117,13 @@ exports.Config = Schema.object({
   imageAnalytics: Schema.boolean().default(true).description('是否为酒狐统计优先输出图片卡片'),
   imageShop: Schema.boolean().default(true).description('是否为酒狐商店优先输出图片卡片'),
   imageInventory: Schema.boolean().default(true).description('是否为酒狐背包优先输出图片卡片'),
+  imageCommission: Schema.boolean().default(true).description('是否为酒狐委托优先输出图片卡片'),
+  imageFavorites: Schema.boolean().default(true).description('是否为酒狐收藏夹优先输出图片卡片'),
+  imageSearch: Schema.boolean().default(true).description('是否为酒狐搜索优先输出图片卡片'),
+  imageDailyQuote: Schema.boolean().default(true).description('是否为每日酒狐优先输出图片卡片'),
+  imageOmikuji: Schema.boolean().default(true).description('是否为酒狐抽签优先输出图片卡片'),
+  imageCategory: Schema.boolean().default(true).description('是否为酒狐分类优先输出图片卡片'),
+  imageQuoteStats: Schema.boolean().default(true).description('是否为酒狐总数优先输出图片卡片'),
   imageEquipResult: Schema.boolean().default(true).description('是否为酒狐装备成功优先输出结果卡片'),
   imageUseResult: Schema.boolean().default(true).description('是否为酒狐使用成功优先输出结果卡片'),
   imageHelp: Schema.boolean().default(true).description('是否为酒狐帮助优先输出图片菜单'),
@@ -365,7 +379,13 @@ exports.apply = (ctx, config = {}) => {
     },
   })
   registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, finalConfig, logger })
-  registerSearchCommands(ctx, quotesLoader)
+  registerSearchCommands(ctx, quotesLoader, {
+    renderImageFeature,
+    renderSearchResultCard,
+    renderCategoryListCard,
+    renderQuoteStatsCard,
+    finalConfig,
+  })
   registerInteractions(ctx, affinity, mood, {
     headpatLevel: finalConfig.headpatLevel, hugLevel: finalConfig.hugLevel, confessLevel: finalConfig.confessLevel,
     feedDrinkLevel: finalConfig.feedDrinkLevel, scratchEarLevel: finalConfig.scratchEarLevel, holdHandLevel: finalConfig.holdHandLevel,
@@ -623,7 +643,24 @@ exports.apply = (ctx, config = {}) => {
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
       favorites.setLastReceived(session.userId, quote)
-      return `${resOutput}[今日酒狐悄悄话]\n${quote}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1 + affinityBonus)}`
+      const progressLine = affinity.formatProgressLine(session.userId, 1 + affinityBonus)
+      const textOutput = `${resOutput}[今日酒狐悄悄话]\n${quote}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${progressLine}`
+
+      return renderImageFeature({
+        feature: '每日酒狐',
+        imageKey: 'imageDailyQuote',
+        imageEnabled: finalConfig.imageDailyQuote,
+        textOutput,
+        render: () => renderDailyQuoteCard(ctx, {
+          data: {
+            quote,
+            ticketReward: 1,
+            progressLine,
+            dateLabel: require('./lib/utils').getTodayKey(),
+          },
+        }),
+        fallbackMessage: '酒狐悄悄话: 每日语录卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐好感 =====
@@ -851,7 +888,25 @@ exports.apply = (ctx, config = {}) => {
       const ticketResult = await affinity.addTickets(session.userId, 1)
       await trackAndNotify(session, 'interact')
       await trackCommission(session, 'interact')
-      return games.drawOmikuji().message + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
+      const omikuji = games.drawOmikuji()
+      const progressLine = affinity.formatProgressLine(session.userId, 1)
+      const textOutput = omikuji.message + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${progressLine}`
+
+      return renderImageFeature({
+        feature: '酒狐抽签',
+        imageKey: 'imageOmikuji',
+        imageEnabled: finalConfig.imageOmikuji,
+        textOutput,
+        render: () => renderOmikujiCard(ctx, {
+          data: {
+            rank: omikuji.rank,
+            text: omikuji.text,
+            ticketReward: 1,
+            progressLine,
+          },
+        }),
+        fallbackMessage: '酒狐悄悄话: 御神签卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐故事 =====
@@ -1336,7 +1391,22 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐收藏夹 =====
   ctx.command('酒狐收藏夹 [page:number]', '查看收藏列表')
-    .action(({ session }, page) => favorites.listFavorites(session.userId, page || 1))
+    .action(({ session }, page) => {
+      const safePage = page || 1
+      const data = favorites.getFavoritesData(session.userId, safePage)
+      const textOutput = favorites.listFavorites(session.userId, safePage)
+      if (data.isEmpty) return textOutput
+
+      return renderImageFeature({
+        feature: '酒狐收藏夹',
+        imageKey: 'imageFavorites',
+        imageEnabled: finalConfig.imageFavorites,
+        textOutput,
+        detail: `page=${data.page}`,
+        render: () => renderFavoritesCard(ctx, { data }),
+        fallbackMessage: '酒狐悄悄话: 收藏夹卡片生成失败了，请稍后再试一次...',
+      })
+    })
 
   // ===== 酒狐取消收藏 =====
   ctx.command('酒狐取消收藏 <index:number>', '取消收藏')
@@ -1388,7 +1458,17 @@ exports.apply = (ctx, config = {}) => {
       const gate = checkLevelGate(session, '委托')
       if (gate) return gate
       const today = require('./lib/utils').getTodayKey()
-      return commission.getDailyTasks(session.userId, today)
+      const data = await commission.getDailyTasksData(session.userId, today)
+      const textOutput = await commission.getDailyTasks(session.userId, today)
+
+      return renderImageFeature({
+        feature: '酒狐委托',
+        imageKey: 'imageCommission',
+        imageEnabled: finalConfig.imageCommission,
+        textOutput,
+        render: () => renderCommissionCard(ctx, { data }),
+        fallbackMessage: '酒狐悄悄话: 委托任务板卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐UI =====
