@@ -1,6 +1,6 @@
 /**
  * ==========================================
- *  酒狐悄悄话增强版 v2.0 - 运行时配置文件
+ *  酒狐悄悄话增强版 v2.3 - 运行时配置文件
  * ==========================================
  *
  *  本文件优先级高于 Koishi 后台面板的配置。
@@ -51,6 +51,38 @@ module.exports = {
   dailyAffinityMax: 20,
 
   // ==========================================
+  //  图片卡片输出
+  // ==========================================
+  //
+  //  如果宿主已安装 Puppeteer 服务，以下指令会优先输出图片卡片。
+  //  对应图片渲染失败时，可由 imageFallbackToText 决定是否回退为文字。
+
+  imageFortune: true,
+  imageAffinity: true,
+  imageCheckinCalendar: true,
+  imageMemoir: true,
+  imageAnalytics: true,
+  imageShop: true,
+  imageInventory: true,
+  imageEquipResult: true,
+  imageUseResult: true,
+  imageHelp: true,
+  imageRareCollection: true,
+  imageRanking: true,
+  imageAchievement: true,
+  imageCheckinResult: true,
+  imageBuyResult: true,
+  imageGiftResult: true,
+  imageStory: true,
+  imageStoryCatalog: true,
+  imageWeather: true,
+  imageMood: true,
+  imageCellar: true,
+  imageBrewResult: true,
+  imageOpenBottleResult: true,
+  imageFallbackToText: true,
+
+  // ==========================================
   //  心情系统
   // ==========================================
   //
@@ -96,28 +128,32 @@ module.exports = {
   //  互动等级门槛
   // ==========================================
   //
-  //  好感等级说明（共 6 级）：
-  //    等级 0 = 陌生人   (需 0 点好感)
-  //    等级 1 = 初识     (需 10 点好感)
-  //    等级 2 = 熟人     (需 30 点好感)
-  //    等级 3 = 好朋友   (需 80 点好感)
-  //    等级 4 = 挚友     (需 150 点好感)
-  //    等级 5 = 灵魂伴侣 (需 300 点好感)
+  //  好感等级说明（共 10 级）：
+  //    Lv0 = 陌生人      (0)
+  //    Lv1 = 初识        (10)
+  //    Lv2 = 点头之交    (25)
+  //    Lv3 = 熟人        (50)
+  //    Lv4 = 好朋友      (90)
+  //    Lv5 = 密友        (140)
+  //    Lv6 = 挚友        (200)
+  //    Lv7 = 知己        (280)
+  //    Lv8 = 灵魂伴侣    (380)
+  //    Lv9 = 命运之绊    (500)
   //
   //  以下配置决定各互动指令需要达到几级才能使用。
   //  如果你想让所有人都能摸头，设为 0 即可。
 
   // 「酒狐摸头」所需最低好感等级
-  // 默认: 3（好朋友，需 80 点好感）
-  headpatLevel: 3,
+  // 默认: 4（好朋友，需 90 点好感）
+  headpatLevel: 4,
 
   // 「酒狐拥抱」所需最低好感等级
-  // 默认: 4（挚友，需 150 点好感）
-  hugLevel: 4,
+  // 默认: 5（密友，需 140 点好感）
+  hugLevel: 5,
 
   // 「酒狐告白」所需最低好感等级
-  // 默认: 5（灵魂伴侣，需 300 点好感）
-  confessLevel: 5,
+  // 默认: 7（知己，需 280 点好感）
+  confessLevel: 7,
 
   // ==========================================
   //  送礼系统
@@ -162,16 +198,16 @@ module.exports = {
   // ==========================================
 
   // 「酒狐喂酒」所需最低好感等级
-  // 默认: 2（熟人，需 30 点好感）
+  // 默认: 2（点头之交，需 25 点好感）
   feedDrinkLevel: 2,
 
   // 「酒狐挠耳朵」所需最低好感等级
-  // 默认: 3（好朋友，需 80 点好感）
-  scratchEarLevel: 3,
+  // 默认: 4（好朋友，需 90 点好感）
+  scratchEarLevel: 4,
 
   // 「酒狐牵手」所需最低好感等级
-  // 默认: 4（挚友，需 150 点好感）
-  holdHandLevel: 4,
+  // 默认: 5（密友，需 140 点好感）
+  holdHandLevel: 5,
 
   // ==========================================
   //  签到系统
