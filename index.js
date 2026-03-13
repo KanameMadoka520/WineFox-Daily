@@ -1,8 +1,8 @@
 /**
- * WineFox-Daily - 酒狐悄悄话增强版 v2.2
+ * WineFox-Daily - 酒狐悄悄话增强版 v2.3
  * Koishi 插件主入口
  *
- * v2.2 新增:
+ * v2.3 现状:
  * - 酒狐签到 / 酒狐签到日历
  * - 酒狐酿酒 / 酒狐酒窖 / 酒狐开瓶
  * - 酒狐商店 / 酒狐购买 / 酒狐背包 / 酒狐装备 / 酒狐使用
@@ -17,6 +17,7 @@
 const path = require('path')
 const fs = require('fs')
 const { Schema } = require('koishi')
+const responseData = require('./data/responses')
 
 // lib 模块
 const QuotesLoader = require('./lib/quotes-loader')
@@ -28,6 +29,32 @@ const { registerPassive, getTodayPassiveCount } = require('./lib/passive')
 const SubmissionSystem = require('./lib/submission')
 const { registerSearchCommands } = require('./lib/search')
 const { registerAnalyticsCommands } = require('./lib/analytics')
+const {
+  hasPuppeteer,
+  renderFortuneCard,
+  renderAffinityCard,
+  renderCheckinCalendarCard,
+  renderMemoirCard,
+  renderAnalyticsCard,
+  renderShopCard,
+  renderInventoryCard,
+  renderEquipResultCard,
+  renderUseResultCard,
+  renderHelpCard,
+  renderRareCollectionCard,
+  renderRankingCard,
+  renderAchievementCard,
+  renderCellarCard,
+  renderBrewResultCard,
+  renderOpenBottleResultCard,
+  renderStoryCards,
+  renderStoryCatalogCard,
+  renderWeatherCard,
+  renderMoodCard,
+  renderCheckinResultCard,
+  renderBuyResultCard,
+  renderGiftResultCard,
+} = require('./lib/card-renderer')
 
 // v2 模块
 const FortuneSystem = require('./lib/fortune')
@@ -51,9 +78,11 @@ const dailyFree = require('./lib/daily-free')
 exports.name = 'WineFox-Daily'
 
 exports.usage = `
-## 酒狐悄悄话增强版 v2.2
+## 酒狐悄悄话增强版 v2.3
 
 一只可爱的酒狐女仆，随时随地为主人送上暖心悄悄话。
+
+已支持多类指令优先输出图片卡片；未启用 Puppeteer 服务或渲染失败时会自动回退文字。
 
 使用「酒狐帮助」查看完整指令列表。
 `.trim()
@@ -65,6 +94,31 @@ exports.Config = Schema.object({
   passiveCooldown: Schema.number().default(600000).description('群聊被动触发冷却时间（毫秒）'),
   rareDropChance: Schema.number().min(0).max(1).default(0.05).description('稀有语录掉落概率 (0~1)'),
   dailyAffinityMax: Schema.number().default(20).description('每日好感度获取上限'),
+  // === 图片输出 ===
+  imageFortune: Schema.boolean().default(true).description('是否为酒狐占卜优先输出图片卡片'),
+  imageAffinity: Schema.boolean().default(true).description('是否为酒狐好感优先输出图片卡片'),
+  imageCheckinCalendar: Schema.boolean().default(true).description('是否为酒狐签到日历优先输出图片卡片'),
+  imageMemoir: Schema.boolean().default(true).description('是否为酒狐回忆优先输出图片卡片'),
+  imageAnalytics: Schema.boolean().default(true).description('是否为酒狐统计优先输出图片卡片'),
+  imageShop: Schema.boolean().default(true).description('是否为酒狐商店优先输出图片卡片'),
+  imageInventory: Schema.boolean().default(true).description('是否为酒狐背包优先输出图片卡片'),
+  imageEquipResult: Schema.boolean().default(true).description('是否为酒狐装备成功优先输出结果卡片'),
+  imageUseResult: Schema.boolean().default(true).description('是否为酒狐使用成功优先输出结果卡片'),
+  imageHelp: Schema.boolean().default(true).description('是否为酒狐帮助优先输出图片菜单'),
+  imageRareCollection: Schema.boolean().default(true).description('是否为酒狐图鉴优先输出图片卡片'),
+  imageRanking: Schema.boolean().default(true).description('是否为酒狐排行优先输出图片卡片'),
+  imageAchievement: Schema.boolean().default(true).description('是否为酒狐成就优先输出图片卡片'),
+  imageCheckinResult: Schema.boolean().default(true).description('是否为酒狐签到成功优先输出结果卡片'),
+  imageBuyResult: Schema.boolean().default(true).description('是否为酒狐购买成功优先输出结果卡片'),
+  imageGiftResult: Schema.boolean().default(true).description('是否为酒狐送礼成功优先输出结果卡片'),
+  imageStory: Schema.boolean().default(true).description('是否为酒狐故事优先输出图片卡片'),
+  imageStoryCatalog: Schema.boolean().default(true).description('是否为酒狐故事目录优先输出图片卡片'),
+  imageWeather: Schema.boolean().default(true).description('是否为酒狐天气优先输出图片卡片'),
+  imageMood: Schema.boolean().default(true).description('是否为酒狐心情优先输出图片卡片'),
+  imageCellar: Schema.boolean().default(true).description('是否为酒狐酒窖优先输出图片卡片'),
+  imageBrewResult: Schema.boolean().default(true).description('是否为酒狐酿酒成功优先输出结果卡片'),
+  imageOpenBottleResult: Schema.boolean().default(true).description('是否为酒狐开瓶成功优先输出结果卡片'),
+  imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
   // === 心情 ===
   enableMoodDecorate: Schema.boolean().default(true).description('是否启用心情修饰语录'),
   moodDecorateChance: Schema.number().min(0).max(1).default(0.4).description('心情修饰词出现概率 (0~1)'),
@@ -211,7 +265,7 @@ exports.apply = (ctx, config = {}) => {
       return shop.getEquippedBonus(userId, 'passive_affinity_bonus')
     },
   })
-  registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount)
+  registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, finalConfig, logger })
   registerSearchCommands(ctx, quotesLoader)
   registerInteractions(ctx, affinity, mood, {
     headpatLevel: finalConfig.headpatLevel, hugLevel: finalConfig.hugLevel, confessLevel: finalConfig.confessLevel,
@@ -228,42 +282,163 @@ exports.apply = (ctx, config = {}) => {
     return next()
   })
 
+  function formatHelpItem(label, gateKey, freeCommands) {
+    const requiredLevel = COMMAND_LEVELS[gateKey] ?? 0
+    let suffix = ''
+    if (requiredLevel > 0) suffix += ` [Lv${requiredLevel}]`
+    if (requiredLevel > 0 && freeCommands.includes(gateKey)) suffix += ' [今日免费]'
+    return `${label}${suffix}`
+  }
+
+  function getHelpData() {
+    const today = require('./lib/utils').getTodayKey()
+    const freeCommands = dailyFree.getDailyFreeCommands(today)
+    const freeLabel = freeCommands.map(cmd => `酒狐${cmd}`).join(' / ')
+
+    return {
+      title: '酒狐悄悄话 v2.3 - 指令列表',
+      groups: [
+        {
+          title: '基础指令',
+          items: [
+            ['酒狐', '随机一条语录'],
+            ['酒狐 <分类名>', '指定分类语录'],
+            ['每日酒狐', '今日专属语录'],
+            ['酒狐好感', '好感度面板'],
+            ['酒狐图鉴', '稀有语录进度'],
+            ['酒狐搜 <关键词>', '搜索语录'],
+            ['酒狐分类', '语录分类列表'],
+            ['酒狐总数', '语录统计'],
+            ['酒狐统计', '互动数据看板'],
+            ['酒狐投稿 <内容>', '投稿语录'],
+          ],
+        },
+        {
+          title: '每日与成长',
+          items: [
+            ['酒狐签到', '每日签到(连续有加成)'],
+            ['酒狐签到日历', '查看签到日历'],
+            ['酒狐占卜', '今日运势'],
+            [formatHelpItem('酒狐委托', '委托', freeCommands), '查看今日 3 个委托任务'],
+            [formatHelpItem('酒狐改名 <名字>', '改名', freeCommands), '高等级专属改名'],
+          ],
+        },
+        {
+          title: '趣味玩法',
+          items: [
+            ['酒狐心情', '酒狐心情状态'],
+            [formatHelpItem('酒狐猜拳 <手势>', '猜拳', freeCommands), '猜拳游戏'],
+            [formatHelpItem('酒狐猜数', '猜数字', freeCommands), '猜数字游戏'],
+            [formatHelpItem('酒狐抽签', '抽签', freeCommands), '御神签'],
+            [formatHelpItem('酒狐故事', '故事', freeCommands), '随机冒险日记'],
+            [formatHelpItem('酒狐故事 <分类>', '故事', freeCommands), '指定分类故事'],
+            ['酒狐故事目录', '故事分类列表'],
+            ['酒狐天气', 'MC天气播报'],
+            [formatHelpItem('酒狐问答', '问答', freeCommands), 'MC知识问答'],
+          ],
+        },
+        {
+          title: '酿酒系统',
+          items: [
+            [formatHelpItem('酒狐酿酒', '酿酒', freeCommands), '查看配方/开始酿酒'],
+            ['酒狐酒窖', '查看酿酒进度'],
+            ['酒狐开瓶', '品尝酿好的酒'],
+          ],
+        },
+        {
+          title: '商店与背包',
+          items: [
+            [formatHelpItem('酒狐商店', '商店', freeCommands), '浏览商品'],
+            [formatHelpItem('酒狐购买 <物品>', '购买', freeCommands), '购买物品'],
+            ['酒狐背包', '查看背包'],
+            ['酒狐装备 <物品>', '装备物品'],
+            ['酒狐使用 <物品>', '使用消耗品'],
+          ],
+        },
+        {
+          title: '社交互动',
+          items: [
+            ['酒狐成就', '成就徽章'],
+            ['酒狐排行', '好感度排行榜'],
+            ['酒狐送礼 @某人', '送好感'],
+            ['酒狐回忆', '回忆录时间线'],
+            [formatHelpItem('酒狐摸头', '摸头', freeCommands), '摸摸酒狐的头'],
+            [formatHelpItem('酒狐拥抱', '拥抱', freeCommands), '给酒狐一个拥抱'],
+            [formatHelpItem('酒狐告白', '告白', freeCommands), '向酒狐告白'],
+            [formatHelpItem('酒狐喂酒', '喂酒', freeCommands), '给酒狐喂酒'],
+            [formatHelpItem('酒狐挠耳朵', '挠耳朵', freeCommands), '挠挠酒狐的耳朵'],
+            [formatHelpItem('酒狐牵手', '牵手', freeCommands), '牵着酒狐的手'],
+            ['酒狐收藏', '收藏语录'],
+            ['酒狐收藏夹', '查看收藏'],
+            ['酒狐取消收藏 <编号>', '删除收藏'],
+          ],
+        },
+        {
+          title: '管理员',
+          items: [
+            ['酒狐审核 / 酒狐通过 / 酒狐拒绝 / 酒狐重载', '审核与维护'],
+          ],
+        },
+      ],
+      footer: `今日免费体验: ${freeLabel} ｜ 戳一戳酒狐也会回复哦~`,
+    }
+  }
+
+  function getRareCollectionData(userId) {
+    const unlockedRares = affinity.getUnlockedRares(userId)
+    const total = quotesLoader.getTotalRareCount()
+    return {
+      total,
+      unlockedCount: unlockedRares.length,
+      items: unlockedRares.map((text, index) => ({ index: index + 1, text })),
+      isEmpty: unlockedRares.length === 0,
+    }
+  }
+
+  function getRankingData() {
+    const allUsers = Object.entries(affinity.data)
+    if (allUsers.length === 0) return { entries: [], isEmpty: true }
+
+    const entries = allUsers
+      .map(([userId, data]) => ({ userId, points: data.points || 0 }))
+      .sort((a, b) => b.points - a.points)
+      .slice(0, 10)
+      .map((entry, index) => ({
+        rank: index + 1,
+        userId: entry.userId,
+        points: entry.points,
+        levelName: affinity.getLevel(entry.points).name,
+      }))
+
+    return { entries, isEmpty: entries.length === 0 }
+  }
+
   // ===== 酒狐帮助 =====
   ctx.command('酒狐帮助', '查看酒狐所有可用指令')
-    .action(() => {
-      const today = require('./lib/utils').getTodayKey()
-      const freeCommands = dailyFree.getDailyFreeCommands(today)
-      return [
-        '== 酒狐悄悄话 v2.3 - 指令列表 ==',
+    .action(async () => {
+      const helpData = getHelpData()
+      const textOutput = [
+        `== ${helpData.title} ==`,
         '',
-        '【基础指令】',
-        '酒狐            随机一条语录',
-        '酒狐 <分类名>    指定分类语录',
-        '每日酒狐         今日专属语录',
-        '酒狐好感         好感度面板',
-        '酒狐图鉴         稀有语录进度',
-        '酒狐搜 <关键词>   搜索语录',
-        '酒狐分类         语录分类列表',
-        '酒狐总数         语录统计',
-        '酒狐统计         互动数据看板',
-        '酒狐投稿 <内容>   投稿语录',
-        '',
-        '【等级指令】',
-        dailyFree.formatHelpLine('酒狐猜拳 <手势>', '猜拳游戏', 1, freeCommands),
-        dailyFree.formatHelpLine('酒狐猜数', '猜数字游戏', 1, freeCommands),
-        dailyFree.formatHelpLine('酒狐抽签', '御神签', 1, freeCommands),
-        dailyFree.formatHelpLine('酒狐喂酒', '给酒狐喂酒', 2, freeCommands),
-        dailyFree.formatHelpLine('酒狐酿酒', '查看配方/开始酿酒', 2, freeCommands),
-        dailyFree.formatHelpLine('酒狐问答', 'MC知识问答', 3, freeCommands),
-        dailyFree.formatHelpLine('酒狐摸头', '摸摸酒狐的头', 4, freeCommands),
-        dailyFree.formatHelpLine('酒狐挠耳朵', '挠挠酒狐的耳朵', 4, freeCommands),
-        dailyFree.formatHelpLine('酒狐拥抱', '给酒狐一个拥抱', 5, freeCommands),
-        dailyFree.formatHelpLine('酒狐牵手', '牵着酒狐的手', 5, freeCommands),
-        dailyFree.formatHelpLine('酒狐告白', '向酒狐告白', 7, freeCommands),
-        dailyFree.formatHelpLine('酒狐改名 <名字>', '灵魂伴侣专属改名', 8, freeCommands),
-        '',
-        `今日免费体验: ${freeCommands.map(cmd => `酒狐${cmd}`).join(' / ')}`,
+        ...helpData.groups.flatMap((group) => [
+          `【${group.title}】`,
+          ...group.items.map(item => `${item[0]}  ${item[1]}`),
+          '',
+        ]),
+        helpData.footer,
       ].join('\n')
+
+      if (!finalConfig.imageHelp || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderHelpCard(ctx, { data: helpData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐帮助图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 帮助菜单卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 主指令: 酒狐 =====
@@ -356,21 +531,49 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐好感 =====
   ctx.command('酒狐好感', '查看与酒狐的好感度')
-    .action(({ session }) => {
+    .action(async ({ session }) => {
       const status = affinity.getStatus(session.userId)
-      const lines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `狐狐券：${status.tickets} 张`, `进度：${status.progress}`]
-      if (status.nextLevel) lines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
-      return lines.join('\n')
+      const textLines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `狐狐券：${status.tickets} 张`, `进度：${status.progress}`]
+      if (status.nextLevel) textLines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
+      const textOutput = textLines.join('\n')
+
+      if (!finalConfig.imageAffinity || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderAffinityCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          status,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐好感图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 好感卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐图鉴 =====
   ctx.command('酒狐图鉴', '查看已解锁的稀有语录进度')
-    .action(({ session }) => {
-      const unlockedRares = affinity.getUnlockedRares(session.userId)
-      const totalRares = quotesLoader.getTotalRareCount()
-      if (totalRares === 0) return '主人，当前的语录本里似乎没有稀有语录呢...'
-      if (unlockedRares.length === 0) return `== 酒狐图鉴 ==\n\n收录进度: 0/${totalRares}\n尚未解锁任何稀有语录。多跟我互动就有机会发现哦~`
-      return ['== 酒狐图鉴 ==', '', `收录进度: ${unlockedRares.length}/${totalRares}`, '', ...unlockedRares.map((q, i) => `${i + 1}. ${q}`)].join('\n')
+    .action(async ({ session }) => {
+      const rareData = getRareCollectionData(session.userId)
+      if (rareData.total === 0) return '主人，当前的语录本里似乎没有稀有语录呢...'
+
+      const textOutput = rareData.isEmpty
+        ? `== 酒狐图鉴 ==\n\n收录进度: 0/${rareData.total}\n尚未解锁任何稀有语录。多跟我互动就有机会发现哦~`
+        : ['== 酒狐图鉴 ==', '', `收录进度: ${rareData.unlockedCount}/${rareData.total}`, '', ...rareData.items.map(item => `${item.index}. ${item.text}`)].join('\n')
+
+      if (!finalConfig.imageRareCollection || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderRareCollectionCard(ctx, { data: rareData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐图鉴图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 图鉴卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐投稿 =====
@@ -401,26 +604,108 @@ exports.apply = (ctx, config = {}) => {
         const ticketResult = await affinity.addTickets(session.userId, result.ticketReward)
         await trackAndNotify(session, 'checkin')
         await trackCommission(session, 'checkin')
-        return `${result.message}\n狐狐券余额: ${ticketResult.newTickets}`
+
+        const textOutput = `${result.message}\n狐狐券余额: ${ticketResult.newTickets}`
+        if (!finalConfig.imageCheckinResult || !hasPuppeteer(ctx)) {
+          return textOutput
+        }
+
+        const userData = checkin.getData(session.userId)
+        const foxLines = responseData.actionResultQuotesCheckin || ['今天也辛苦啦。']
+        const foxLine = require('./lib/utils').randomPick(foxLines)
+
+        try {
+          return await renderCheckinResultCard(ctx, {
+            data: {
+              tag: '今日奖励',
+              mainRows: [
+                { label: '好感', value: `+${result.reward}`, muted: `连续 ${userData.streak} 天 · 累计 ${userData.totalDays} 天` },
+                { label: '狐狐券', value: `+${result.ticketReward}`, muted: `当前余额 ${ticketResult.newTickets} 张` },
+              ],
+              suggestions: ['酒狐签到日历', '酒狐好感'],
+              foxLine,
+            },
+          })
+        } catch (err) {
+          logger.warn('[fox] 酒狐签到结果卡片渲染失败', err)
+          if (finalConfig.imageFallbackToText) return textOutput
+          return '酒狐悄悄话: 签到结果卡片生成失败了，请稍后再试一次...'
+        }
       }
       return result.message
     })
 
   // ===== 酒狐签到日历 =====
   ctx.command('酒狐签到日历', '查看签到日历')
-    .action(({ session }) => checkin.getCalendar(session.userId))
+    .action(async ({ session }) => {
+      const calendarData = checkin.getCalendarData(session.userId)
+      const textOutput = checkin.getCalendar(session.userId)
+
+      if (!finalConfig.imageCheckinCalendar || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderCheckinCalendarCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          data: calendarData,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐签到日历图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 签到日历卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐占卜 =====
   ctx.command('酒狐占卜', '今日运势占卜')
     .action(async ({ session }) => {
       await trackAndNotify(session, 'fortune')
       await trackCommission(session, 'fortune')
-      return fortune.getTodayFortune(session.userId)
+      const fortuneData = fortune.getTodayFortuneData(session.userId)
+      const textOutput = fortune.formatFortuneText(fortuneData)
+
+      if (!finalConfig.imageFortune || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderFortuneCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          data: fortuneData,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐占卜图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 占卜卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐心情 =====
   ctx.command('酒狐心情', '查看酒狐当前心情')
-    .action(() => mood.getStatusText())
+    .action(async () => {
+      const moodInfo = mood.getMood()
+      const textOutput = mood.getStatusText()
+
+      if (!finalConfig.imageMood || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderMoodCard(ctx, {
+          data: {
+            title: '酒狐心情',
+            mood: moodInfo.name,
+            emoji: moodInfo.emoji,
+            body: textOutput,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐心情图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 心情卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐猜拳 =====
   ctx.command('酒狐猜拳 <choice:text>', '和酒狐猜拳')
@@ -500,19 +785,58 @@ exports.apply = (ctx, config = {}) => {
 
       if (category && category.trim()) {
         const catName = story.findCategory(category.trim())
-        if (catName) {
-          const text = await story.getStoryByCategory(catName)
-          return (text || '这个分类暂时没有故事了...') + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
+        if (!catName) {
+          return `没有找到「${category.trim()}」这个分类...用「酒狐故事目录」看看有哪些吧！`
         }
-        return `没有找到「${category.trim()}」这个分类...用「酒狐故事目录」看看有哪些吧！`
+
+        const storyData = await story.getStoryDataByCategory(catName)
+        const textOutput = (storyData?.text || '这个分类暂时没有故事了...') + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
+        if (!storyData || !finalConfig.imageStory || !hasPuppeteer(ctx)) {
+          return textOutput
+        }
+
+        try {
+          return await renderStoryCards(ctx, { data: storyData })
+        } catch (err) {
+          logger.warn('[fox] 酒狐故事图片渲染失败', err)
+          if (finalConfig.imageFallbackToText) return textOutput
+          return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
+        }
       }
 
-      return (await story.getRandomStory()) + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
+      const storyData = await story.getRandomStoryData()
+      const textOutput = `${storyData.text}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
+      if (!finalConfig.imageStory || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderStoryCards(ctx, { data: storyData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐故事图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐故事目录 =====
   ctx.command('酒狐故事目录', '查看故事分类列表')
-    .action(() => story.getCategoryList())
+    .action(async () => {
+      const catalogData = story.getCatalogData()
+      const textOutput = story.getCategoryList()
+
+      if (!finalConfig.imageStoryCatalog || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderStoryCatalogCard(ctx, { data: catalogData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐故事目录图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 故事目录卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐问答 =====
   ctx.command('酒狐问答', 'MC知识问答')
@@ -592,12 +916,40 @@ exports.apply = (ctx, config = {}) => {
         }
       }
       await brewing.confirmBrewing(session.userId, result._recipeName, shop.getEquippedBonus(session.userId, 'brew_time_reduction'))
-      return result.message
+      const textOutput = result.message
+      if (!finalConfig.imageBrewResult || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderBrewResultCard(ctx, {
+          data: brewing.getBrewResultCardData(result),
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐酿酒结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 酿酒结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐酒窖 =====
   ctx.command('酒狐酒窖', '查看酿酒进度')
-    .action(({ session }) => brewing.getCellar(session.userId))
+    .action(({ session }) => {
+      const textOutput = brewing.getCellar(session.userId)
+      if (!finalConfig.imageCellar || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return renderCellarCard(ctx, {
+          data: brewing.getCellarCardData(session.userId),
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐酒窖图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 酒窖卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐开瓶 =====
   ctx.command('酒狐开瓶', '品尝酿好的酒')
@@ -612,7 +964,24 @@ exports.apply = (ctx, config = {}) => {
         await trackCommission(session, 'brew')
         if (result.quality === '传说') await trackAndNotify(session, 'brew_legendary')
         mood.onEvent('tipsy')
-        return result.message + `\n狐狐券 +${ticketReward} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
+        const textOutput = result.message + `\n狐狐券 +${ticketReward} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
+        if (!finalConfig.imageOpenBottleResult || !hasPuppeteer(ctx)) {
+          return textOutput
+        }
+
+        try {
+          return await renderOpenBottleResultCard(ctx, {
+            data: {
+              ...brewing.getOpenBottleResultCardData(result),
+              ticketReward,
+              ticketBalance: ticketResult.newTickets,
+            },
+          })
+        } catch (err) {
+          logger.warn('[fox] 酒狐开瓶结果卡片渲染失败', err)
+          if (finalConfig.imageFallbackToText) return textOutput
+          return '酒狐悄悄话: 开瓶结果卡片生成失败了，请稍后再试一次...'
+        }
       }
       if (result.spoiled) {
         await affinity.removePoints(session.userId, result.penalty || 3)
@@ -623,11 +992,24 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐商店 =====
   ctx.command('酒狐商店', '浏览商品')
-    .action(({ session }) => {
+    .action(async ({ session }) => {
       const gate = checkLevelGate(session, '商店')
       if (gate) return gate
       const status = affinity.getStatus(session.userId)
-      return shop.getShopList(status.level.level)
+      const shopData = shop.getShopData(status.level.level)
+      const textOutput = shop.getShopList(status.level.level)
+
+      if (!finalConfig.imageShop || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderShopCard(ctx, { data: shopData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐商店图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 商店卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐购买 =====
@@ -645,19 +1027,79 @@ exports.apply = (ctx, config = {}) => {
         }
       }
       await shop.confirmBuy(session.userId, result)
-      return result.message
+
+      const textOutput = result.message
+      if (!finalConfig.imageBuyResult || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      const foxLines = responseData.actionResultQuotesBuy || ['买到了就要好好用哦。']
+      const foxLine = require('./lib/utils').randomPick(foxLines)
+      const itemName = result._itemName || item.trim()
+      const itemType = result._itemType || 'unknown'
+      const suggestions = itemType === 'equip'
+        ? [`酒狐装备 ${itemName}`, '酒狐背包']
+        : [`酒狐使用 ${itemName}`, '酒狐背包']
+
+      try {
+        return await renderBuyResultCard(ctx, {
+          data: {
+            tag: '商店',
+            mainRows: [
+              { label: '物品', value: itemName, muted: `消耗狐狐券 ${result.cost} 张` },
+              { label: '类型', value: itemType === 'equip' ? '装备' : '消耗品' },
+            ],
+            suggestions,
+            foxLine,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐购买结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 购买结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐背包 =====
   ctx.command('酒狐背包', '查看背包')
-    .action(({ session }) => shop.getInventory(session.userId))
+    .action(async ({ session }) => {
+      const inventoryData = shop.getInventoryData(session.userId)
+      const textOutput = shop.getInventory(session.userId)
+
+      if (!finalConfig.imageInventory || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderInventoryCard(ctx, { data: inventoryData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐背包图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 背包卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐装备 =====
   ctx.command('酒狐装备 <item:text>', '装备物品')
     .action(async ({ session }, item) => {
       if (!item || !item.trim()) return '请指定要装备的物品名'
       const result = await shop.equip(session.userId, item.trim())
-      return result.message
+      if (!result.success || !finalConfig.imageEquipResult || !hasPuppeteer(ctx)) {
+        return result.message
+      }
+
+      try {
+        return await renderEquipResultCard(ctx, {
+          data: {
+            itemName: item.trim(),
+            message: result.message,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐装备结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return result.message
+        return '酒狐悄悄话: 装备结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐使用 =====
@@ -679,31 +1121,88 @@ exports.apply = (ctx, config = {}) => {
           }
         }
       }
-      return result.message
+      if (!result.success || !finalConfig.imageUseResult || !hasPuppeteer(ctx)) {
+        return result.message
+      }
+
+      try {
+        return await renderUseResultCard(ctx, {
+          data: {
+            itemName: item.trim(),
+            message: result.message,
+            effect: result.effect,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐使用结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return result.message
+        return '酒狐悄悄话: 使用结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐回忆 =====
   ctx.command('酒狐回忆', '查看回忆录')
-    .action(({ session }) => memoir.getMemoir(session.userId))
+    .action(async ({ session }) => {
+      const memoirData = memoir.getMemoirData(session.userId)
+      const textOutput = memoir.getMemoir(session.userId)
+
+      if (!memoirData || !finalConfig.imageMemoir || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderMemoirCard(ctx, {
+          userName: session.username || session.author?.name || session.userId,
+          data: memoirData,
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐回忆图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 回忆卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐成就 =====
   ctx.command('酒狐成就', '查看成就徽章')
-    .action(({ session }) => achievements.getPanel(session.userId))
+    .action(async ({ session }) => {
+      const achievementData = achievements.getPanelData(session.userId)
+      const textOutput = achievements.getPanel(session.userId)
+
+      if (!finalConfig.imageAchievement || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderAchievementCard(ctx, { data: achievementData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐成就图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 成就卡片生成失败了，请稍后再试一次...'
+      }
+    })
 
   // ===== 酒狐排行 =====
   ctx.command('酒狐排行', '好感度排行榜 Top10')
-    .action(() => {
-      const allUsers = Object.entries(affinity.data)
-      if (allUsers.length === 0) return '还没有人和酒狐互动过呢...'
-      const sorted = allUsers.map(([userId, data]) => ({ userId, points: data.points || 0 })).sort((a, b) => b.points - a.points).slice(0, 10)
-      const medals = ['[1]', '[2]', '[3]']
-      const lines = ['== 酒狐好感度排行榜 ==', '']
-      sorted.forEach((entry, idx) => {
-        const prefix = idx < 3 ? medals[idx] : `[${idx + 1}]`
-        const level = affinity.getLevel(entry.points)
-        lines.push(`${prefix} ${entry.userId} - ${entry.points}点 (${level.name})`)
-      })
-      return lines.join('\n')
+    .action(async () => {
+      const rankingData = getRankingData()
+      const textOutput = rankingData.isEmpty
+        ? '还没有人和酒狐互动过呢...'
+        : ['== 酒狐好感度排行榜 ==', '', ...rankingData.entries.map((entry) => {
+          const prefix = entry.rank <= 3 ? `[${entry.rank}]` : `[${entry.rank}]`
+          return `${prefix} ${entry.userId} - ${entry.points}点 (${entry.levelName})`
+        })].join('\n')
+
+      if (!finalConfig.imageRanking || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderRankingCard(ctx, { data: rankingData })
+      } catch (err) {
+        logger.warn('[fox] 酒狐排行图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 排行卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐送礼 =====
@@ -734,7 +1233,31 @@ exports.apply = (ctx, config = {}) => {
       await affinity._save()
       await trackAndNotify(session, 'gift')
       await trackCommission(session, 'gift')
-      return `酒狐悄悄话: 已帮主人把心意传达给 ${targetId} 了！\n（你 -${giftCost}好感度，对方 +${giftBonus}好感度）`
+
+      const textOutput = `酒狐悄悄话: 已帮主人把心意传达给 ${targetId} 了！\n（你 -${giftCost}好感度，对方 +${giftBonus}好感度）`
+      if (!finalConfig.imageGiftResult || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      const foxLines = responseData.actionResultQuotesGift || ['我会好好传达的。']
+      const foxLine = require('./lib/utils').randomPick(foxLines)
+
+      try {
+        return await renderGiftResultCard(ctx, {
+          data: {
+            tag: '社交',
+            mainRows: [
+              { label: '对象', value: targetId, muted: `你 -${giftCost} / 对方 +${giftBonus}` },
+            ],
+            suggestions: ['酒狐排行', '酒狐回忆'],
+            foxLine,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐送礼结果卡片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 送礼结果卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐收藏 =====
@@ -766,7 +1289,37 @@ exports.apply = (ctx, config = {}) => {
       await trackAndNotify(session, 'interact')
       const weatherData = weather.getWeather()
       if (mood && weatherData.moodEffect) mood.onEvent('interact')
-      return weather.getReport()
+      const textOutput = weather.getReport()
+      const periodMap = {
+        latenight: '深夜',
+        dawn: '清晨',
+        morning: '上午',
+        noon: '中午',
+        afternoon: '下午',
+        evening: '傍晚',
+        night: '夜晚',
+      }
+      const periodKey = require('./lib/utils').getTimePeriod()
+
+      if (!finalConfig.imageWeather || !hasPuppeteer(ctx)) {
+        return textOutput
+      }
+
+      try {
+        return await renderWeatherCard(ctx, {
+          data: {
+            title: '酒狐天气',
+            status: weatherData.name,
+            period: periodMap[periodKey] || '未知',
+            body: weatherData.description,
+            foxComment: weatherData.foxComment,
+          },
+        })
+      } catch (err) {
+        logger.warn('[fox] 酒狐天气图片渲染失败', err)
+        if (finalConfig.imageFallbackToText) return textOutput
+        return '酒狐悄悄话: 天气卡片生成失败了，请稍后再试一次...'
+      }
     })
 
   // ===== 酒狐委托 =====
@@ -805,5 +1358,5 @@ exports.apply = (ctx, config = {}) => {
       return ok ? `语录重载成功！共 ${quotesLoader.count} 条语录，${quotesLoader.categoryNames.length} 个分类。` : '语录重载失败。'
     })
 
-  logger.info(`[fox] 酒狐悄悄话增强版 v2.2 已启动 | 语录 ${quotesLoader.count} 条 | 故事 ${story.count} 篇`)
+  logger.info(`[fox] 酒狐悄悄话增强版 v2.3 已启动 | 语录 ${quotesLoader.count} 条 | 故事 ${story.count} 篇`)
 }

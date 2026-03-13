@@ -20,7 +20,9 @@
     "description": "酒狐悄悄话增强版 🦊 智能语录系统",
     "service": {
       "required": [],
-      "optional": []
+      "optional": [
+        "puppeteer"
+      ]
     }
   },
   "peerDependencies": {

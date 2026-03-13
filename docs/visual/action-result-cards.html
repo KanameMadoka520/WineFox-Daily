@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WineFox 动作结果卡 Mockups</title>
+  <style>
+    :root {
+      --bg1: #2f1b3d;
+      --bg2: #5b2f5f;
+      --bg3: #7d4e57;
+      --card: rgba(255,255,255,0.10);
+      --stroke: rgba(255,255,255,0.16);
+      --text: #fff7f5;
+      --muted: rgba(255,247,245,0.78);
+      --accent1: #ffd166;
+      --accent2: #ff8fab;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 28px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 45%, var(--bg3) 100%);
+    }
+    h1 { margin: 0 0 14px; font-size: 22px; }
+    p { margin: 0 0 18px; color: var(--muted); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      border-radius: 18px;
+      background: rgba(0,0,0,0.14);
+      border: 1px solid rgba(255,255,255,0.10);
+      padding: 16px;
+    }
+    .panel-title { font-weight: 700; margin-bottom: 10px; }
+
+    .card {
+      width: 520px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08));
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow: 0 20px 60px rgba(22, 8, 25, 0.35);
+      padding: 18px;
+      margin: 12px auto 0;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .title { font-size: 20px; font-weight: 800; }
+    .tag {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.10);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.08);
+      margin-top: 10px;
+    }
+    .label { color: var(--muted); font-size: 12px; }
+    .value { font-size: 16px; font-weight: 700; }
+    .muted { color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    .pillbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pill {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.10);
+    }
+
+    .ok {
+      background: linear-gradient(90deg, rgba(255, 209, 102, 0.26), rgba(255, 143, 171, 0.18));
+      border-color: rgba(255,255,255,0.18);
+    }
+    .warn {
+      background: rgba(255, 143, 171, 0.12);
+      border-color: rgba(255, 143, 171, 0.24);
+    }
+
+    .footer { margin-top: 12px; text-align: right; font-size: 12px; color: rgba(255,247,245,0.68); }
+
+    @media (max-width: 1200px) {
+      .grid { grid-template-columns: 1fr; }
+      .card { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <h1>WineFox 动作反馈小结果卡（Mockups）</h1>
+  <p>用于：酒狐签到结果 / 酒狐购买结果 / 酒狐送礼结果。对比信息密度与“游戏 UI”感。</p>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="panel-title">A：紧凑结果卡（推荐）</div>
+      <div class="card">
+        <div class="header">
+          <div class="title">签到成功</div>
+          <div class="tag">今日奖励</div>
+        </div>
+        <div class="row ok">
+          <div class="label">奖励</div>
+          <div>
+            <div class="value">好感 +3</div>
+            <div class="muted">连续 4 天（加成已计算）</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">提示</div>
+          <div class="muted">使用「酒狐签到日历」查看本月进度</div>
+        </div>
+        <div class="footer">WineFox-Daily · Result Card</div>
+      </div>
+
+      <div class="card">
+        <div class="header">
+          <div class="title">购买成功</div>
+          <div class="tag">商店</div>
+        </div>
+        <div class="row ok">
+          <div class="label">物品</div>
+          <div>
+            <div class="value">木剑</div>
+            <div class="muted">消耗好感 10 点</div>
+          </div>
+        </div>
+        <div class="pillbar">
+          <div class="pill">类型：装备</div>
+          <div class="pill">建议：酒狐装备 木剑</div>
+        </div>
+        <div class="footer">WineFox-Daily · Result Card</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">B：剧情式结果卡（更有仪式感）</div>
+      <div class="card">
+        <div class="header">
+          <div class="title">送礼成功</div>
+          <div class="tag">社交</div>
+        </div>
+        <div class="row ok">
+          <div class="label">对象</div>
+          <div>
+            <div class="value">@某人</div>
+            <div class="muted">你送出了 1 点好感</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">酒狐</div>
+          <div class="muted">“主人真温柔……我会把这份心意记下来。”</div>
+        </div>
+        <div class="pillbar">
+          <div class="pill">接下来：酒狐回忆</div>
+          <div class="pill">查看：酒狐排行</div>
+        </div>
+        <div class="footer">WineFox-Daily · Result Card</div>
+      </div>
+
+      <div class="card">
+        <div class="header">
+          <div class="title">操作失败</div>
+          <div class="tag">回退文字</div>
+        </div>
+        <div class="row warn">
+          <div class="label">原因</div>
+          <div>
+            <div class="value">好感不足</div>
+            <div class="muted">需要 10 点，当前只有 6 点</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">建议</div>
+          <div class="muted">多和酒狐互动、签到或小游戏获取好感</div>
+        </div>
+        <div class="footer">WineFox-Daily · Result Card</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
