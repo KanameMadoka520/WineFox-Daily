@@ -76,6 +76,9 @@ const CommissionSystem = require('./lib/commission')
 const dailyFree = require('./lib/daily-free')
 
 exports.name = 'WineFox-Daily'
+exports.inject = {
+  optional: ['puppeteer'],
+}
 
 exports.usage = `
 ## 酒狐悄悄话增强版 v2.3
