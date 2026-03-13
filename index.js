@@ -31,6 +31,10 @@ const { registerSearchCommands } = require('./lib/search')
 const { registerAnalyticsCommands } = require('./lib/analytics')
 const {
   hasPuppeteer,
+  listCardThemes,
+  resolveCardTheme,
+  setCardTheme,
+  getActiveCardThemeInfo,
   renderFortuneCard,
   renderAffinityCard,
   renderCheckinCalendarCard,
@@ -74,6 +78,7 @@ const BrewingSystem = require('./lib/brewing')
 const ShopSystem = require('./lib/shop')
 const CommissionSystem = require('./lib/commission')
 const dailyFree = require('./lib/daily-free')
+const UIThemeSystem = require('./lib/ui-theme')
 
 exports.name = 'WineFox-Daily'
 exports.inject = {
@@ -173,7 +178,8 @@ exports.apply = (ctx, config = {}) => {
     } = options
 
     const puppeteerAvailable = hasPuppeteer(ctx)
-    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable }
+    const currentTheme = getActiveCardThemeInfo()
+    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: currentTheme.id }
     for (const check of extraChecks) {
       checkOptions[check.key] = check.value
     }
@@ -284,6 +290,8 @@ exports.apply = (ctx, config = {}) => {
   const brewing = new BrewingSystem(memoryDir, logger)
   const shop = new ShopSystem(memoryDir, logger)
   const commission = new CommissionSystem(memoryDir, logger, affinity)
+  const uiTheme = new UIThemeSystem(memoryDir, logger)
+  const appliedTheme = setCardTheme(uiTheme.getThemeId()) || getActiveCardThemeInfo()
 
   const COMMAND_LEVELS = {
     猜拳: 1,
@@ -317,6 +325,8 @@ exports.apply = (ctx, config = {}) => {
   if (!quotesLoader.load()) {
     logger.warn('[fox] 语录文件加载失败')
   }
+
+  logger.info(`[fox] 当前卡片主题: ${appliedTheme.name} (${appliedTheme.id})`)
 
   // ===== 成就上报辅助（含奖励发放） =====
   async function trackAndNotify(session, eventType, value) {
@@ -465,6 +475,7 @@ exports.apply = (ctx, config = {}) => {
         {
           title: '管理员',
           items: [
+            ['酒狐UI [主题名]', '查看或切换图片主题'],
             ['酒狐审核 / 酒狐通过 / 酒狐拒绝 / 酒狐重载', '审核与维护'],
           ],
         },
@@ -1378,6 +1389,47 @@ exports.apply = (ctx, config = {}) => {
       if (gate) return gate
       const today = require('./lib/utils').getTodayKey()
       return commission.getDailyTasks(session.userId, today)
+    })
+
+  // ===== 酒狐UI =====
+  ctx.command('酒狐UI [theme:text]', '查看或切换图片主题', { authority: 3 })
+    .action(async (_, theme) => {
+      const currentTheme = getActiveCardThemeInfo()
+      const themes = listCardThemes()
+
+      if (!theme || !theme.trim()) {
+        const lines = [
+          '== 酒狐UI ==',
+          '',
+          `当前主题: ${currentTheme.name} (${currentTheme.id})`,
+          currentTheme.description ? `说明: ${currentTheme.description}` : '',
+          '',
+          '可用主题:',
+          ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
+          '',
+          '使用「酒狐UI 主题名」切换，例如：酒狐UI 晴天玻璃',
+        ].filter(Boolean)
+        return lines.join('\n')
+      }
+
+      const resolvedTheme = resolveCardTheme(theme)
+      if (!resolvedTheme) {
+        return [
+          `酒狐悄悄话: 没找到「${theme.trim()}」这个主题哦。`,
+          '',
+          '可用主题:',
+          ...themes.map(item => `- ${item.name}`),
+        ].join('\n')
+      }
+
+      const result = await uiTheme.setTheme(resolvedTheme.id)
+      if (!result.success) {
+        return '酒狐悄悄话: 主题切换失败了，请稍后再试一次...'
+      }
+
+      setCardTheme(resolvedTheme.id)
+      logger.info(`[fox] 卡片主题已切换为 ${resolvedTheme.name} (${resolvedTheme.id})`)
+      return `酒狐悄悄话: 图片主题已切换为「${resolvedTheme.name}」！\n${resolvedTheme.description}`
     })
 
   // ===== 管理员指令 =====
