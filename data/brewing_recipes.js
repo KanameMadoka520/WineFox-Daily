@@ -7,7 +7,7 @@
  *  - name: 酒名
  *  - materials: 材料描述（纯文案，不做实际扣除）
  *  - brewTimeMs: 酿造时间（毫秒）
- *  - cost: 消耗好感度
+ *  - cost: 消耗狐狐券
  *  - qualityMin/qualityMax: 品质范围索引 (0=普通, 1=优良, 2=极品, 3=稀有, 4=传说)
  *  - qualityRange: 品质范围描述
  *  - openLines: 开瓶时的文案（随机选一条）

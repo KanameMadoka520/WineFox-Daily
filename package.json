@@ -1,6 +1,6 @@
 {
   "name": "koishi-plugin-winefox-daily",
-  "version": "2.0.0",
+  "version": "2.3.0",
   "description": "酒狐悄悄话增强版 - 基于 Koishi 的智能语录机器人插件，包含时间感知、好感度系统、节日检测、分类查询等功能",
   "main": "index.js",
   "keywords": [

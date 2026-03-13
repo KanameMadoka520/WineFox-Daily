@@ -45,6 +45,8 @@ const MemoirSystem = require('./lib/memoir')
 const QuizSystem = require('./lib/quiz')
 const BrewingSystem = require('./lib/brewing')
 const ShopSystem = require('./lib/shop')
+const CommissionSystem = require('./lib/commission')
+const dailyFree = require('./lib/daily-free')
 
 exports.name = 'WineFox-Daily'
 
@@ -71,12 +73,12 @@ exports.Config = Schema.object({
   guessMaxAttempts: Schema.number().default(10).description('猜数字最大猜测次数'),
   guessRange: Schema.number().default(100).description('猜数字数字范围上限'),
   // === 互动 ===
-  headpatLevel: Schema.number().min(0).max(5).default(3).description('摸头所需好感等级'),
-  hugLevel: Schema.number().min(0).max(5).default(4).description('拥抱所需好感等级'),
-  confessLevel: Schema.number().min(0).max(5).default(5).description('告白所需好感等级'),
-  feedDrinkLevel: Schema.number().min(0).max(5).default(2).description('喂酒所需好感等级'),
-  scratchEarLevel: Schema.number().min(0).max(5).default(3).description('挠耳朵所需好感等级'),
-  holdHandLevel: Schema.number().min(0).max(5).default(4).description('牵手所需好感等级'),
+  headpatLevel: Schema.number().min(0).max(9).default(4).description('摸头所需好感等级'),
+  hugLevel: Schema.number().min(0).max(9).default(5).description('拥抱所需好感等级'),
+  confessLevel: Schema.number().min(0).max(9).default(7).description('告白所需好感等级'),
+  feedDrinkLevel: Schema.number().min(0).max(9).default(2).description('喂酒所需好感等级'),
+  scratchEarLevel: Schema.number().min(0).max(9).default(4).description('挠耳朵所需好感等级'),
+  holdHandLevel: Schema.number().min(0).max(9).default(5).description('牵手所需好感等级'),
   // === 送礼 ===
   giftDailyLimit: Schema.number().default(3).description('每日送礼次数上限'),
   giftCostSender: Schema.number().default(1).description('送礼扣除好感度'),
@@ -138,6 +140,36 @@ exports.apply = (ctx, config = {}) => {
   const quiz = new QuizSystem(memoryDir, logger)
   const brewing = new BrewingSystem(memoryDir, logger)
   const shop = new ShopSystem(memoryDir, logger)
+  const commission = new CommissionSystem(memoryDir, logger, affinity)
+
+  const COMMAND_LEVELS = {
+    猜拳: 1,
+    猜数字: 1,
+    抽签: 1,
+    喂酒: 2,
+    酿酒: 2,
+    商店: 2,
+    购买: 2,
+    问答: 3,
+    故事: 3,
+    摸头: 4,
+    挠耳朵: 4,
+    拥抱: 5,
+    牵手: 5,
+    委托: 6,
+    告白: 7,
+    改名: 8,
+  }
+
+  function checkLevelGate(session, commandName) {
+    const requiredLevel = COMMAND_LEVELS[commandName] ?? 0
+    if (requiredLevel <= 0) return null
+    const status = affinity.getStatus(session.userId)
+    if (status.level.level >= requiredLevel) return null
+    const today = require('./lib/utils').getTodayKey()
+    if (dailyFree.isCommandFree(commandName, today)) return null
+    return `酒狐悄悄话: 这个指令需要达到 Lv${requiredLevel} 才能使用哦...今天多陪陪酒狐吧。`
+  }
 
   if (!quotesLoader.load()) {
     logger.warn('[fox] 语录文件加载失败')
@@ -151,14 +183,34 @@ exports.apply = (ctx, config = {}) => {
       let msg = `\n\n-- 成就解锁！${achNames} --`
       if (totalReward > 0) {
         await affinity.addBonusPoints(session.userId, totalReward)
+        const ticketResult = await affinity.addTickets(session.userId, totalReward)
         msg += `\n奖励好感度 +${totalReward}！`
+        msg += `\n奖励狐狐券 +${totalReward}！(当前 ${ticketResult.newTickets} 张)`
       }
       session.send(msg)
     }
   }
 
+  async function trackCommission(session, eventType, value = 1) {
+    const today = require('./lib/utils').getTodayKey()
+    await commission.getDailyTasks(session.userId, today)
+    const result = await commission.recordProgress(session.userId, eventType, value)
+    if (result.completedTasks.length > 0) {
+      const lines = ['\n\n-- 委托完成！ --']
+      for (const task of result.completedTasks) {
+        lines.push(`${task.desc} (+${task.reward}狐狐券)`)
+      }
+      session.send(lines.join('\n'))
+    }
+  }
+
   // ===== 注册被动/搜索/分析/互动 =====
-  registerPassive(ctx, quotesLoader, affinity, finalConfig)
+  registerPassive(ctx, quotesLoader, affinity, {
+    ...finalConfig,
+    getPassiveAffinityBonus(userId) {
+      return shop.getEquippedBonus(userId, 'passive_affinity_bonus')
+    },
+  })
   registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount)
   registerSearchCommands(ctx, quotesLoader)
   registerInteractions(ctx, affinity, mood, {
@@ -166,69 +218,51 @@ exports.apply = (ctx, config = {}) => {
     feedDrinkLevel: finalConfig.feedDrinkLevel, scratchEarLevel: finalConfig.scratchEarLevel, holdHandLevel: finalConfig.holdHandLevel,
   })
 
+  ctx.middleware((session, next) => {
+    if (!session.guildId) return next()
+    const today = require('./lib/utils').getTodayKey()
+    if (dailyFree.shouldAnnounce(session.guildId, today)) {
+      dailyFree.markAnnounced(session.guildId, today)
+      session.send(dailyFree.getAnnouncementText(today))
+    }
+    return next()
+  })
+
   // ===== 酒狐帮助 =====
   ctx.command('酒狐帮助', '查看酒狐所有可用指令')
     .action(() => {
+      const today = require('./lib/utils').getTodayKey()
+      const freeCommands = dailyFree.getDailyFreeCommands(today)
       return [
-        '== 酒狐悄悄话 v2.2 - 指令列表 ==',
+        '== 酒狐悄悄话 v2.3 - 指令列表 ==',
         '',
         '【基础指令】',
-        '  酒狐            随机一条语录',
-        '  酒狐 <分类名>    指定分类语录',
-        '  每日酒狐         今日专属语录',
-        '  酒狐好感         好感度面板',
-        '  酒狐图鉴         稀有语录进度',
-        '  酒狐搜 <关键词>   搜索语录',
-        '  酒狐分类         语录分类列表',
-        '  酒狐总数         语录统计',
-        '  酒狐统计         互动数据看板',
-        '  酒狐投稿 <内容>   投稿语录',
-        '  酒狐改名 <名字>   灵魂伴侣改名',
+        '酒狐            随机一条语录',
+        '酒狐 <分类名>    指定分类语录',
+        '每日酒狐         今日专属语录',
+        '酒狐好感         好感度面板',
+        '酒狐图鉴         稀有语录进度',
+        '酒狐搜 <关键词>   搜索语录',
+        '酒狐分类         语录分类列表',
+        '酒狐总数         语录统计',
+        '酒狐统计         互动数据看板',
+        '酒狐投稿 <内容>   投稿语录',
         '',
-        '【每日】',
-        '  酒狐签到         每日签到(连续有加成)',
-        '  酒狐签到日历      查看签到日历',
-        '  酒狐占卜         今日运势',
+        '【等级指令】',
+        dailyFree.formatHelpLine('酒狐猜拳 <手势>', '猜拳游戏', 1, freeCommands),
+        dailyFree.formatHelpLine('酒狐猜数', '猜数字游戏', 1, freeCommands),
+        dailyFree.formatHelpLine('酒狐抽签', '御神签', 1, freeCommands),
+        dailyFree.formatHelpLine('酒狐喂酒', '给酒狐喂酒', 2, freeCommands),
+        dailyFree.formatHelpLine('酒狐酿酒', '查看配方/开始酿酒', 2, freeCommands),
+        dailyFree.formatHelpLine('酒狐问答', 'MC知识问答', 3, freeCommands),
+        dailyFree.formatHelpLine('酒狐摸头', '摸摸酒狐的头', 4, freeCommands),
+        dailyFree.formatHelpLine('酒狐挠耳朵', '挠挠酒狐的耳朵', 4, freeCommands),
+        dailyFree.formatHelpLine('酒狐拥抱', '给酒狐一个拥抱', 5, freeCommands),
+        dailyFree.formatHelpLine('酒狐牵手', '牵着酒狐的手', 5, freeCommands),
+        dailyFree.formatHelpLine('酒狐告白', '向酒狐告白', 7, freeCommands),
+        dailyFree.formatHelpLine('酒狐改名 <名字>', '灵魂伴侣专属改名', 8, freeCommands),
         '',
-        '【趣味玩法】',
-        '  酒狐心情         酒狐心情状态',
-        '  酒狐猜拳 <手势>   猜拳游戏',
-        '  酒狐猜数         猜数字游戏',
-        '  酒狐抽签         御神签',
-        '  酒狐故事         随机冒险日记',
-        '  酒狐故事 <分类>   指定分类故事',
-        '  酒狐故事目录      故事分类列表',
-        '  酒狐天气         MC天气播报',
-        '  酒狐问答         MC知识问答',
-        '',
-        '【酿酒系统】',
-        '  酒狐酿酒         查看配方/开始酿酒',
-        '  酒狐酿酒 <配方>   开始酿指定的酒',
-        '  酒狐酒窖         查看酿酒进度',
-        '  酒狐开瓶         品尝酿好的酒',
-        '',
-        '【商店与背包】',
-        '  酒狐商店         浏览商品',
-        '  酒狐购买 <物品>   购买物品',
-        '  酒狐背包         查看背包',
-        '  酒狐装备 <物品>   装备物品',
-        '  酒狐使用 <物品>   使用消耗品',
-        '',
-        '【社交互动】',
-        '  酒狐成就         成就徽章',
-        '  酒狐排行         好感度排行榜',
-        '  酒狐送礼 @某人    送好感',
-        '  酒狐回忆         回忆录时间线',
-        '  酒狐摸头 / 酒狐拥抱 / 酒狐告白',
-        '  酒狐喂酒 / 酒狐挠耳朵 / 酒狐牵手',
-        '  酒狐收藏         收藏语录',
-        '  酒狐收藏夹       查看收藏',
-        '  酒狐取消收藏 <编号> 删除收藏',
-        '',
-        '【管理员】',
-        '  酒狐审核 / 酒狐通过 / 酒狐拒绝 / 酒狐重载',
-        '',
-        '戳一戳酒狐也会回复哦~',
+        `今日免费体验: ${freeCommands.map(cmd => `酒狐${cmd}`).join(' / ')}`,
       ].join('\n')
     })
 
@@ -241,8 +275,12 @@ exports.apply = (ctx, config = {}) => {
       }
 
       const userId = session.userId
-      const affinityResult = await affinity.addPoints(userId, 1)
+      const affinityBonus = shop.getEquippedBonus(userId, 'affinity_bonus') + shop.getEquippedBonus(userId, 'all_affinity_bonus')
+      const dailyCapBonus = shop.getEquippedBonus(userId, 'daily_cap_bonus')
+      const decayImmune = shop.getEquippedBonus(userId, 'decay_immune') > 0
+      const affinityResult = await affinity.addPoints(userId, 1 + affinityBonus, { dailyCapBonus, decayImmune })
       await trackAndNotify(session, 'interact')
+      await trackCommission(session, 'interact')
 
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
@@ -295,27 +333,32 @@ exports.apply = (ctx, config = {}) => {
       const suffix = equipEffect ? '\n' + equipEffect : ''
 
       favorites.setLastReceived(userId, finalQuote)
-      return resOutput + decorated + suffix
+      return resOutput + decorated + suffix + `\n${affinity.formatProgressLine(userId, 1 + affinityBonus)}`
     })
 
   // ===== 每日酒狐 =====
   ctx.command('每日酒狐', '获取今日专属酒狐语录')
     .action(async ({ session }) => {
       if (quotesLoader.count === 0) return '主人，语录本不见了...'
-      const affinityResult = await affinity.addPoints(session.userId, 1)
+      const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
+      const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
+      const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
+      const affinityResult = await affinity.addPoints(session.userId, 1 + affinityBonus, { dailyCapBonus, decayImmune })
+      const ticketResult = await affinity.addTickets(session.userId, 1)
       await trackAndNotify(session, 'interact')
+      await trackCommission(session, 'interact')
       const quote = await daily.getTodayQuote(quotesLoader.all)
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
       favorites.setLastReceived(session.userId, quote)
-      return `${resOutput}[今日酒狐悄悄话]\n${quote}`
+      return `${resOutput}[今日酒狐悄悄话]\n${quote}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1 + affinityBonus)}`
     })
 
   // ===== 酒狐好感 =====
   ctx.command('酒狐好感', '查看与酒狐的好感度')
     .action(({ session }) => {
       const status = affinity.getStatus(session.userId)
-      const lines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `进度：${status.progress}`]
+      const lines = ['== 酒狐好感度面板 ==', '', `称号：${status.level.name}`, `好感值：${status.points} 点`, `狐狐券：${status.tickets} 张`, `进度：${status.progress}`]
       if (status.nextLevel) lines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
       return lines.join('\n')
     })
@@ -355,7 +398,10 @@ exports.apply = (ctx, config = {}) => {
       const result = await checkin.checkin(session.userId)
       if (result.success) {
         await affinity.addBonusPoints(session.userId, result.reward)
+        const ticketResult = await affinity.addTickets(session.userId, result.ticketReward)
         await trackAndNotify(session, 'checkin')
+        await trackCommission(session, 'checkin')
+        return `${result.message}\n狐狐券余额: ${ticketResult.newTickets}`
       }
       return result.message
     })
@@ -368,6 +414,7 @@ exports.apply = (ctx, config = {}) => {
   ctx.command('酒狐占卜', '今日运势占卜')
     .action(async ({ session }) => {
       await trackAndNotify(session, 'fortune')
+      await trackCommission(session, 'fortune')
       return fortune.getTodayFortune(session.userId)
     })
 
@@ -378,19 +425,36 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐猜拳 =====
   ctx.command('酒狐猜拳 <choice:text>', '和酒狐猜拳')
     .action(async ({ session }, choice) => {
+      const gate = checkLevelGate(session, '猜拳')
+      if (gate) return gate
       if (!choice || !choice.trim()) return '请出「石头」「剪刀」或「布」哦！'
       const result = games.playRPS(choice.trim())
       if (result.result === 'invalid') return result.message
-      if (result.affinityBonus > 0) await affinity.addPoints(session.userId, result.affinityBonus)
-      if (result.result === 'win') await trackAndNotify(session, 'rps_win')
-      else await trackAndNotify(session, 'rps_play')
+      let ticketLine = ''
+      if (result.affinityBonus > 0) {
+        const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
+        const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
+        const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
+        await affinity.addPoints(session.userId, result.affinityBonus + affinityBonus, { dailyCapBonus, decayImmune })
+      }
+      if (result.result === 'win') {
+        const ticketResult = await affinity.addTickets(session.userId, 2)
+        ticketLine = `\n狐狐券 +2 (当前 ${ticketResult.newTickets} 张)`
+        await trackAndNotify(session, 'rps_win')
+        await trackCommission(session, 'rps_win')
+      } else {
+        await trackAndNotify(session, 'rps_play')
+      }
       mood.onEvent(result.result === 'win' ? 'game_lose' : result.result === 'lose' ? 'game_win' : 'interact')
-      return result.message
+      const progressDelta = result.affinityBonus > 0 ? result.affinityBonus + (shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')) : 0
+      return result.message + ticketLine + (progressDelta > 0 ? `\n${affinity.formatProgressLine(session.userId, progressDelta)}` : '')
     })
 
   // ===== 酒狐猜数 =====
   ctx.command('酒狐猜数 [guess:number]', '猜数字游戏')
     .action(async ({ session }, guess) => {
+      const gate = checkLevelGate(session, '猜数字')
+      if (gate) return gate
       const sessionKey = `${session.guildId || 'dm'}:${session.userId}`
       if (guess === null || guess === undefined) {
         if (quiz.isInQuiz(sessionKey)) {
@@ -399,8 +463,17 @@ exports.apply = (ctx, config = {}) => {
       }
       const result = games.playGuessNumber(sessionKey, guess)
       if (result.finished && result.affinityBonus > 0) {
-        await affinity.addPoints(session.userId, result.affinityBonus)
-        if (guess !== null && guess !== undefined) await trackAndNotify(session, 'guess_win')
+        const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
+        const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
+        const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
+        await affinity.addPoints(session.userId, result.affinityBonus + affinityBonus, { dailyCapBonus, decayImmune })
+        if (guess !== null && guess !== undefined) {
+          const tickets = result.affinityBonus >= 5 ? 5 : result.affinityBonus >= 3 ? 4 : 3
+          const ticketResult = await affinity.addTickets(session.userId, tickets)
+          await trackAndNotify(session, 'guess_win')
+          await trackCommission(session, 'guess_win')
+          return result.message + `\n狐狐券 +${tickets} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.affinityBonus + affinityBonus)}`
+        }
       }
       return result.message
     })
@@ -408,27 +481,33 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐抽签 =====
   ctx.command('酒狐抽签', '抽取御神签')
     .action(async ({ session }) => {
+      const gate = checkLevelGate(session, '抽签')
+      if (gate) return gate
       await affinity.addPoints(session.userId, 1)
+      const ticketResult = await affinity.addTickets(session.userId, 1)
       await trackAndNotify(session, 'interact')
-      return games.drawOmikuji().message
+      await trackCommission(session, 'interact')
+      return games.drawOmikuji().message + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
     })
 
   // ===== 酒狐故事 =====
   ctx.command('酒狐故事 [category:text]', '酒狐的冒险日记')
     .action(async ({ session }, category) => {
       await affinity.addPoints(session.userId, 1)
+      const ticketResult = await affinity.addTickets(session.userId, 1)
       await trackAndNotify(session, 'story')
+      await trackCommission(session, 'story')
 
       if (category && category.trim()) {
         const catName = story.findCategory(category.trim())
         if (catName) {
           const text = await story.getStoryByCategory(catName)
-          return text || '这个分类暂时没有故事了...'
+          return (text || '这个分类暂时没有故事了...') + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
         }
         return `没有找到「${category.trim()}」这个分类...用「酒狐故事目录」看看有哪些吧！`
       }
 
-      return await story.getRandomStory()
+      return (await story.getRandomStory()) + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
     })
 
   // ===== 酒狐故事目录 =====
@@ -438,6 +517,8 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐问答 =====
   ctx.command('酒狐问答', 'MC知识问答')
     .action(async ({ session }) => {
+      const gate = checkLevelGate(session, '问答')
+      if (gate) return gate
       const sessionKey = `${session.guildId || 'dm'}:${session.userId}`
       if (games.isInGuessing(sessionKey)) {
         return '酒狐悄悄话: 你正在猜数字呢，先完成当前游戏吧~'
@@ -459,9 +540,14 @@ exports.apply = (ctx, config = {}) => {
 
     if (result.correct) {
       await affinity.addPoints(session.userId, result.reward)
+      const ticketResult = await affinity.addTickets(session.userId, 3)
       await trackAndNotify(session, 'quiz_correct')
+      await trackCommission(session, 'quiz_correct')
+      return result.message + `\n狐狐券 +3 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
     } else {
+      await affinity.removePoints(session.userId, 1)
       await achievements.recordEvent(session.userId, 'quiz_wrong')
+      return result.message + `\n${affinity.formatProgressLine(session.userId, -1)}`
     }
     return result.message
   }, true)
@@ -477,8 +563,14 @@ exports.apply = (ctx, config = {}) => {
     const num = parseInt(text, 10)
     const result = games.playGuessNumber(sessionKey, num)
     if (result.finished && result.affinityBonus > 0) {
-      await affinity.addPoints(session.userId, result.affinityBonus)
+      const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
+      const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
+      const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
+      await affinity.addPoints(session.userId, result.affinityBonus + affinityBonus, { dailyCapBonus, decayImmune })
+      const tickets = result.affinityBonus >= 5 ? 5 : result.affinityBonus >= 3 ? 4 : 3
+      const ticketResult = await affinity.addTickets(session.userId, tickets)
       await trackAndNotify(session, 'guess_win')
+      return result.message + `\n狐狐券 +${tickets} (当前 ${ticketResult.newTickets} 张)`
     }
     return result.message
   }, true)
@@ -486,18 +578,20 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐酿酒 =====
   ctx.command('酒狐酿酒 [recipe:text]', '酿酒系统')
     .action(async ({ session }, recipe) => {
+      const gate = checkLevelGate(session, '酿酒')
+      if (gate) return gate
       if (!recipe || !recipe.trim()) return brewing.getRecipeList()
 
       const result = await brewing.startBrewing(session.userId, recipe.trim())
       if (!result.success) return result.message
 
       if (result.cost > 0) {
-        const spend = await affinity.spendPoints(session.userId, result.cost)
+        const spend = await affinity.spendTickets(session.userId, result.cost)
         if (!spend.success) {
-          return `酒狐悄悄话: 好感度不够消耗呢...需要 ${result.cost} 点，主人当前只有 ${spend.newPoints} 点。`
+          return `酒狐悄悄话: 狐狐券不够消耗呢...需要 ${result.cost} 张，主人当前只有 ${spend.newTickets} 张。`
         }
       }
-      await brewing.confirmBrewing(session.userId, result._recipeName)
+      await brewing.confirmBrewing(session.userId, result._recipeName, shop.getEquippedBonus(session.userId, 'brew_time_reduction'))
       return result.message
     })
 
@@ -511,28 +605,43 @@ exports.apply = (ctx, config = {}) => {
       const result = await brewing.openBottle(session.userId)
       if (result.success) {
         await affinity.addBonusPoints(session.userId, result.reward)
+        const ticketMap = { '普通': 3, '优良': 8, '极品': 15, '稀有': 25, '传说': 50 }
+        const ticketReward = ticketMap[result.quality] || 0
+        const ticketResult = await affinity.addTickets(session.userId, ticketReward)
         await trackAndNotify(session, 'brew')
+        await trackCommission(session, 'brew')
         if (result.quality === '传说') await trackAndNotify(session, 'brew_legendary')
         mood.onEvent('tipsy')
+        return result.message + `\n狐狐券 +${ticketReward} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
+      }
+      if (result.spoiled) {
+        await affinity.removePoints(session.userId, result.penalty || 3)
+        return result.message + `\n${affinity.formatProgressLine(session.userId, -(result.penalty || 3))}`
       }
       return result.message
     })
 
   // ===== 酒狐商店 =====
   ctx.command('酒狐商店', '浏览商品')
-    .action(() => shop.getShopList())
+    .action(({ session }) => {
+      const gate = checkLevelGate(session, '商店')
+      if (gate) return gate
+      const status = affinity.getStatus(session.userId)
+      return shop.getShopList(status.level.level)
+    })
 
   // ===== 酒狐购买 =====
   ctx.command('酒狐购买 <item:text>', '购买物品')
     .action(async ({ session }, item) => {
       if (!item || !item.trim()) return '请指定物品名，例如：酒狐购买 狐狸耳饰'
-      const result = shop.buyItem(session.userId, item.trim())
+      const status = affinity.getStatus(session.userId)
+      const result = shop.buyItem(session.userId, item.trim(), status.level.level)
       if (!result.success) return result.message
 
       if (result.cost > 0) {
-        const spend = await affinity.spendPoints(session.userId, result.cost)
+        const spend = await affinity.spendTickets(session.userId, result.cost)
         if (!spend.success) {
-          return `酒狐悄悄话: 好感度不够呢...需要 ${result.cost} 点，主人当前只有 ${spend.newPoints} 点。`
+          return `酒狐悄悄话: 狐狐券不够呢...需要 ${result.cost} 张，主人当前只有 ${spend.newTickets} 张。`
         }
       }
       await shop.confirmBuy(session.userId, result)
@@ -624,6 +733,7 @@ exports.apply = (ctx, config = {}) => {
       await affinity.addPoints(targetId, giftBonus)
       await affinity._save()
       await trackAndNotify(session, 'gift')
+      await trackCommission(session, 'gift')
       return `酒狐悄悄话: 已帮主人把心意传达给 ${targetId} 了！\n（你 -${giftCost}好感度，对方 +${giftBonus}好感度）`
     })
 
@@ -631,7 +741,10 @@ exports.apply = (ctx, config = {}) => {
   ctx.command('酒狐收藏', '收藏最近收到的语录')
     .action(async ({ session }) => {
       const result = await favorites.addFavorite(session.userId)
-      if (result.success) await trackAndNotify(session, 'favorite')
+      if (result.success) {
+        await trackAndNotify(session, 'favorite')
+        await trackCommission(session, 'favorite')
+      }
       return result.message
     })
 
@@ -656,9 +769,14 @@ exports.apply = (ctx, config = {}) => {
       return weather.getReport()
     })
 
-  // ===== 酒狐委托(预留) =====
-  ctx.command('酒狐委托', '酒狐委托任务板（敬请期待）')
-    .action(() => '== 酒狐委托 ==\n\n这个功能以后可能会和 MC 模组联动哦！\n酒狐悄悄话: 正在学习怎么发布委托呢...敬请期待~')
+  // ===== 酒狐委托 =====
+  ctx.command('酒狐委托', '查看今日委托任务')
+    .action(async ({ session }) => {
+      const gate = checkLevelGate(session, '委托')
+      if (gate) return gate
+      const today = require('./lib/utils').getTodayKey()
+      return commission.getDailyTasks(session.userId, today)
+    })
 
   // ===== 管理员指令 =====
   ctx.command('酒狐审核', '查看待审核投稿', { authority: 3 })
