@@ -153,6 +153,59 @@ exports.apply = (ctx, config = {}) => {
     logger.info(`[fox] ${feature} 图片条件 ${parts.join(' ')}`)
   }
 
+  function formatLogDetail(detail) {
+    return detail ? ` ${detail}` : ''
+  }
+
+  async function renderImageFeature(options) {
+    const {
+      feature,
+      imageKey,
+      imageEnabled,
+      textOutput,
+      render,
+      fallbackMessage,
+      detail = '',
+      extraChecks = [],
+    } = options
+
+    const puppeteerAvailable = hasPuppeteer(ctx)
+    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable }
+    for (const check of extraChecks) {
+      checkOptions[check.key] = check.value
+    }
+    if (detail) checkOptions.detail = detail
+    logImageCheck(feature, checkOptions)
+
+    if (!imageEnabled) {
+      logger.info(`[fox] ${feature}回退文字输出 reason=${imageKey}_disabled${formatLogDetail(detail)}`)
+      return textOutput
+    }
+
+    if (!puppeteerAvailable) {
+      logger.info(`[fox] ${feature}回退文字输出 reason=puppeteer_unavailable${formatLogDetail(detail)}`)
+      return textOutput
+    }
+
+    const failedCheck = extraChecks.find(check => !check.ok)
+    if (failedCheck) {
+      logger.info(`[fox] ${feature}回退文字输出 reason=${failedCheck.reason}${formatLogDetail(detail)}`)
+      return textOutput
+    }
+
+    try {
+      logger.info(`[fox] ${feature}开始图片渲染${formatLogDetail(detail)}`)
+      const rendered = await render()
+      logger.info(`[fox] ${feature}图片渲染成功${formatLogDetail(detail)}`)
+      return rendered
+    } catch (err) {
+      logger.warn(`[fox] ${feature}图片渲染失败`, err)
+      logger.info(`[fox] ${feature}回退文字输出 reason=render_failed${formatLogDetail(detail)}`)
+      if (finalConfig.imageFallbackToText) return textOutput
+      return fallbackMessage
+    }
+  }
+
   function logFeatureTrigger(session, label, extra = {}) {
     const base = {
       feature: label,
@@ -461,28 +514,14 @@ exports.apply = (ctx, config = {}) => {
         helpData.footer,
       ].join('\n')
 
-      const puppeteerAvailable = hasPuppeteer(ctx)
-      logImageCheck('酒狐帮助', {
-        imageHelp: !!finalConfig.imageHelp,
-        puppeteerAvailable,
+      return renderImageFeature({
+        feature: '酒狐帮助',
+        imageKey: 'imageHelp',
+        imageEnabled: finalConfig.imageHelp,
+        textOutput,
+        render: () => renderHelpCard(ctx, { data: helpData }),
+        fallbackMessage: '酒狐悄悄话: 帮助菜单卡片生成失败了，请稍后再试一次...',
       })
-
-      if (!finalConfig.imageHelp || !puppeteerAvailable) {
-        logger.info(`[fox] 酒狐帮助回退文字输出 reason=${!finalConfig.imageHelp ? 'image_help_disabled' : 'puppeteer_unavailable'}`)
-        return textOutput
-      }
-
-      try {
-        logger.info('[fox] 酒狐帮助开始图片渲染')
-        const rendered = await renderHelpCard(ctx, { data: helpData })
-        logger.info('[fox] 酒狐帮助图片渲染成功')
-        return rendered
-      } catch (err) {
-        logger.warn('[fox] 酒狐帮助图片渲染失败', err)
-        logger.info('[fox] 酒狐帮助回退文字输出 reason=render_failed')
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 帮助菜单卡片生成失败了，请稍后再试一次...'
-      }
     })
 
   // ===== 主指令: 酒狐 =====
@@ -581,20 +620,17 @@ exports.apply = (ctx, config = {}) => {
       if (status.nextLevel) textLines.push(`下一等级：${status.nextLevel.name} (需要 ${status.nextLevel.minPoints} 点)`)
       const textOutput = textLines.join('\n')
 
-      if (!finalConfig.imageAffinity || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderAffinityCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐好感',
+        imageKey: 'imageAffinity',
+        imageEnabled: finalConfig.imageAffinity,
+        textOutput,
+        render: () => renderAffinityCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           status,
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐好感图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 好感卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 好感卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐图鉴 =====
@@ -607,17 +643,14 @@ exports.apply = (ctx, config = {}) => {
         ? `== 酒狐图鉴 ==\n\n收录进度: 0/${rareData.total}\n尚未解锁任何稀有语录。多跟我互动就有机会发现哦~`
         : ['== 酒狐图鉴 ==', '', `收录进度: ${rareData.unlockedCount}/${rareData.total}`, '', ...rareData.items.map(item => `${item.index}. ${item.text}`)].join('\n')
 
-      if (!finalConfig.imageRareCollection || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderRareCollectionCard(ctx, { data: rareData })
-      } catch (err) {
-        logger.warn('[fox] 酒狐图鉴图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 图鉴卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐图鉴',
+        imageKey: 'imageRareCollection',
+        imageEnabled: finalConfig.imageRareCollection,
+        textOutput,
+        render: () => renderRareCollectionCard(ctx, { data: rareData }),
+        fallbackMessage: '酒狐悄悄话: 图鉴卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐投稿 =====
@@ -650,16 +683,16 @@ exports.apply = (ctx, config = {}) => {
         await trackCommission(session, 'checkin')
 
         const textOutput = `${result.message}\n狐狐券余额: ${ticketResult.newTickets}`
-        if (!finalConfig.imageCheckinResult || !hasPuppeteer(ctx)) {
-          return textOutput
-        }
-
         const userData = checkin.getData(session.userId)
         const foxLines = responseData.actionResultQuotesCheckin || ['今天也辛苦啦。']
         const foxLine = require('./lib/utils').randomPick(foxLines)
 
-        try {
-          return await renderCheckinResultCard(ctx, {
+        return renderImageFeature({
+          feature: '酒狐签到结果',
+          imageKey: 'imageCheckinResult',
+          imageEnabled: finalConfig.imageCheckinResult,
+          textOutput,
+          render: () => renderCheckinResultCard(ctx, {
             data: {
               tag: '今日奖励',
               mainRows: [
@@ -669,12 +702,9 @@ exports.apply = (ctx, config = {}) => {
               suggestions: ['酒狐签到日历', '酒狐好感'],
               foxLine,
             },
-          })
-        } catch (err) {
-          logger.warn('[fox] 酒狐签到结果卡片渲染失败', err)
-          if (finalConfig.imageFallbackToText) return textOutput
-          return '酒狐悄悄话: 签到结果卡片生成失败了，请稍后再试一次...'
-        }
+          }),
+          fallbackMessage: '酒狐悄悄话: 签到结果卡片生成失败了，请稍后再试一次...',
+        })
       }
       return result.message
     })
@@ -685,20 +715,17 @@ exports.apply = (ctx, config = {}) => {
       const calendarData = checkin.getCalendarData(session.userId)
       const textOutput = checkin.getCalendar(session.userId)
 
-      if (!finalConfig.imageCheckinCalendar || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderCheckinCalendarCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐签到日历',
+        imageKey: 'imageCheckinCalendar',
+        imageEnabled: finalConfig.imageCheckinCalendar,
+        textOutput,
+        render: () => renderCheckinCalendarCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           data: calendarData,
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐签到日历图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 签到日历卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 签到日历卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐占卜 =====
@@ -709,20 +736,17 @@ exports.apply = (ctx, config = {}) => {
       const fortuneData = fortune.getTodayFortuneData(session.userId)
       const textOutput = fortune.formatFortuneText(fortuneData)
 
-      if (!finalConfig.imageFortune || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderFortuneCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐占卜',
+        imageKey: 'imageFortune',
+        imageEnabled: finalConfig.imageFortune,
+        textOutput,
+        render: () => renderFortuneCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           data: fortuneData,
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐占卜图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 占卜卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 占卜卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐心情 =====
@@ -731,24 +755,21 @@ exports.apply = (ctx, config = {}) => {
       const moodInfo = mood.getMood()
       const textOutput = mood.getStatusText()
 
-      if (!finalConfig.imageMood || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderMoodCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐心情',
+        imageKey: 'imageMood',
+        imageEnabled: finalConfig.imageMood,
+        textOutput,
+        render: () => renderMoodCard(ctx, {
           data: {
             title: '酒狐心情',
             mood: moodInfo.name,
             emoji: moodInfo.emoji,
             body: textOutput,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐心情图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 心情卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 心情卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐猜拳 =====
@@ -836,46 +857,34 @@ exports.apply = (ctx, config = {}) => {
 
         const storyData = await story.getStoryDataByCategory(catName)
         const textOutput = (storyData?.text || '这个分类暂时没有故事了...') + `\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
-        const puppeteerAvailable = hasPuppeteer(ctx)
-        logger.info(`[fox] 酒狐故事图片条件 hasStoryData=${!!storyData} imageStory=${!!finalConfig.imageStory} puppeteerAvailable=${puppeteerAvailable} mode=category category=${catName}`)
-        if (!storyData || !finalConfig.imageStory || !puppeteerAvailable) {
-          logger.info(`[fox] 酒狐故事回退文字输出 reason=${!storyData ? 'missing_story_data' : !finalConfig.imageStory ? 'image_story_disabled' : 'puppeteer_unavailable'} mode=category category=${catName}`)
-          return textOutput
-        }
-
-        try {
-          logger.info(`[fox] 酒狐故事开始图片渲染 mode=category category=${catName}`)
-          const rendered = await renderStoryCards(ctx, { data: storyData })
-          logger.info(`[fox] 酒狐故事图片渲染成功 mode=category category=${catName}`)
-          return rendered
-        } catch (err) {
-          logger.warn('[fox] 酒狐故事图片渲染失败', err)
-          logger.info(`[fox] 酒狐故事回退文字输出 reason=render_failed mode=category category=${catName}`)
-          if (finalConfig.imageFallbackToText) return textOutput
-          return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
-        }
+        return renderImageFeature({
+          feature: '酒狐故事',
+          imageKey: 'imageStory',
+          imageEnabled: finalConfig.imageStory,
+          textOutput,
+          detail: `mode=category category=${catName}`,
+          extraChecks: [
+            { key: 'hasStoryData', value: !!storyData, ok: !!storyData, reason: 'missing_story_data' },
+          ],
+          render: () => renderStoryCards(ctx, { data: storyData }),
+          fallbackMessage: '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...',
+        })
       }
 
       const storyData = await story.getRandomStoryData()
       const textOutput = `${storyData.text}\n狐狐券 +1 (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, 1)}`
-      const puppeteerAvailable = hasPuppeteer(ctx)
-      logger.info(`[fox] 酒狐故事图片条件 hasStoryData=${!!storyData} imageStory=${!!finalConfig.imageStory} puppeteerAvailable=${puppeteerAvailable} mode=random`)
-      if (!finalConfig.imageStory || !puppeteerAvailable) {
-        logger.info(`[fox] 酒狐故事回退文字输出 reason=${!finalConfig.imageStory ? 'image_story_disabled' : 'puppeteer_unavailable'} mode=random`)
-        return textOutput
-      }
-
-      try {
-        logger.info('[fox] 酒狐故事开始图片渲染 mode=random')
-        const rendered = await renderStoryCards(ctx, { data: storyData })
-        logger.info('[fox] 酒狐故事图片渲染成功 mode=random')
-        return rendered
-      } catch (err) {
-        logger.warn('[fox] 酒狐故事图片渲染失败', err)
-        logger.info('[fox] 酒狐故事回退文字输出 reason=render_failed mode=random')
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐故事',
+        imageKey: 'imageStory',
+        imageEnabled: finalConfig.imageStory,
+        textOutput,
+        detail: 'mode=random',
+        extraChecks: [
+          { key: 'hasStoryData', value: !!storyData, ok: !!storyData, reason: 'missing_story_data' },
+        ],
+        render: () => renderStoryCards(ctx, { data: storyData }),
+        fallbackMessage: '酒狐悄悄话: 故事卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐故事目录 =====
@@ -884,29 +893,17 @@ exports.apply = (ctx, config = {}) => {
       const catalogData = story.getCatalogData()
       const textOutput = story.getCategoryList()
 
-      const puppeteerAvailable = hasPuppeteer(ctx)
-      logImageCheck('酒狐故事目录', {
-        imageStoryCatalog: !!finalConfig.imageStoryCatalog,
-        puppeteerAvailable,
-        hasCatalogData: !!catalogData,
+      return renderImageFeature({
+        feature: '酒狐故事目录',
+        imageKey: 'imageStoryCatalog',
+        imageEnabled: finalConfig.imageStoryCatalog,
+        textOutput,
+        extraChecks: [
+          { key: 'hasCatalogData', value: !!catalogData, ok: !!catalogData, reason: 'missing_catalog_data' },
+        ],
+        render: () => renderStoryCatalogCard(ctx, { data: catalogData }),
+        fallbackMessage: '酒狐悄悄话: 故事目录卡片生成失败了，请稍后再试一次...',
       })
-
-      if (!finalConfig.imageStoryCatalog || !puppeteerAvailable) {
-        logger.info(`[fox] 酒狐故事目录回退文字输出 reason=${!finalConfig.imageStoryCatalog ? 'image_story_catalog_disabled' : 'puppeteer_unavailable'}`)
-        return textOutput
-      }
-
-      try {
-        logger.info('[fox] 酒狐故事目录开始图片渲染')
-        const rendered = await renderStoryCatalogCard(ctx, { data: catalogData })
-        logger.info('[fox] 酒狐故事目录图片渲染成功')
-        return rendered
-      } catch (err) {
-        logger.warn('[fox] 酒狐故事目录图片渲染失败', err)
-        logger.info('[fox] 酒狐故事目录回退文字输出 reason=render_failed')
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 故事目录卡片生成失败了，请稍后再试一次...'
-      }
     })
 
   // ===== 酒狐问答 =====
@@ -990,38 +987,32 @@ exports.apply = (ctx, config = {}) => {
       }
       await brewing.confirmBrewing(session.userId, result._recipeName, shop.getEquippedBonus(session.userId, 'brew_time_reduction'))
       const textOutput = result.message
-      if (!finalConfig.imageBrewResult || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderBrewResultCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐酿酒结果',
+        imageKey: 'imageBrewResult',
+        imageEnabled: finalConfig.imageBrewResult,
+        textOutput,
+        render: () => renderBrewResultCard(ctx, {
           data: brewing.getBrewResultCardData(result),
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐酿酒结果卡片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 酿酒结果卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 酿酒结果卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐酒窖 =====
   ctx.command('酒狐酒窖', '查看酿酒进度')
     .action(({ session }) => {
       const textOutput = brewing.getCellar(session.userId)
-      if (!finalConfig.imageCellar || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return renderCellarCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐酒窖',
+        imageKey: 'imageCellar',
+        imageEnabled: finalConfig.imageCellar,
+        textOutput,
+        render: () => renderCellarCard(ctx, {
           data: brewing.getCellarCardData(session.userId),
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐酒窖图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 酒窖卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 酒窖卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐开瓶 =====
@@ -1038,23 +1029,20 @@ exports.apply = (ctx, config = {}) => {
         if (result.quality === '传说') await trackAndNotify(session, 'brew_legendary')
         mood.onEvent('tipsy')
         const textOutput = result.message + `\n狐狐券 +${ticketReward} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
-        if (!finalConfig.imageOpenBottleResult || !hasPuppeteer(ctx)) {
-          return textOutput
-        }
-
-        try {
-          return await renderOpenBottleResultCard(ctx, {
+        return renderImageFeature({
+          feature: '酒狐开瓶结果',
+          imageKey: 'imageOpenBottleResult',
+          imageEnabled: finalConfig.imageOpenBottleResult,
+          textOutput,
+          render: () => renderOpenBottleResultCard(ctx, {
             data: {
               ...brewing.getOpenBottleResultCardData(result),
               ticketReward,
               ticketBalance: ticketResult.newTickets,
             },
-          })
-        } catch (err) {
-          logger.warn('[fox] 酒狐开瓶结果卡片渲染失败', err)
-          if (finalConfig.imageFallbackToText) return textOutput
-          return '酒狐悄悄话: 开瓶结果卡片生成失败了，请稍后再试一次...'
-        }
+          }),
+          fallbackMessage: '酒狐悄悄话: 开瓶结果卡片生成失败了，请稍后再试一次...',
+        })
       }
       if (result.spoiled) {
         await affinity.removePoints(session.userId, result.penalty || 3)
@@ -1072,17 +1060,14 @@ exports.apply = (ctx, config = {}) => {
       const shopData = shop.getShopData(status.level.level)
       const textOutput = shop.getShopList(status.level.level)
 
-      if (!finalConfig.imageShop || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderShopCard(ctx, { data: shopData })
-      } catch (err) {
-        logger.warn('[fox] 酒狐商店图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 商店卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐商店',
+        imageKey: 'imageShop',
+        imageEnabled: finalConfig.imageShop,
+        textOutput,
+        render: () => renderShopCard(ctx, { data: shopData }),
+        fallbackMessage: '酒狐悄悄话: 商店卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐购买 =====
@@ -1102,10 +1087,6 @@ exports.apply = (ctx, config = {}) => {
       await shop.confirmBuy(session.userId, result)
 
       const textOutput = result.message
-      if (!finalConfig.imageBuyResult || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
       const foxLines = responseData.actionResultQuotesBuy || ['买到了就要好好用哦。']
       const foxLine = require('./lib/utils').randomPick(foxLines)
       const itemName = result._itemName || item.trim()
@@ -1114,8 +1095,13 @@ exports.apply = (ctx, config = {}) => {
         ? [`酒狐装备 ${itemName}`, '酒狐背包']
         : [`酒狐使用 ${itemName}`, '酒狐背包']
 
-      try {
-        return await renderBuyResultCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐购买结果',
+        imageKey: 'imageBuyResult',
+        imageEnabled: finalConfig.imageBuyResult,
+        textOutput,
+        detail: `item=${itemName}`,
+        render: () => renderBuyResultCard(ctx, {
           data: {
             tag: '商店',
             mainRows: [
@@ -1125,12 +1111,9 @@ exports.apply = (ctx, config = {}) => {
             suggestions,
             foxLine,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐购买结果卡片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 购买结果卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 购买结果卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐背包 =====
@@ -1139,17 +1122,14 @@ exports.apply = (ctx, config = {}) => {
       const inventoryData = shop.getInventoryData(session.userId)
       const textOutput = shop.getInventory(session.userId)
 
-      if (!finalConfig.imageInventory || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderInventoryCard(ctx, { data: inventoryData })
-      } catch (err) {
-        logger.warn('[fox] 酒狐背包图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 背包卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐背包',
+        imageKey: 'imageInventory',
+        imageEnabled: finalConfig.imageInventory,
+        textOutput,
+        render: () => renderInventoryCard(ctx, { data: inventoryData }),
+        fallbackMessage: '酒狐悄悄话: 背包卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐装备 =====
@@ -1157,22 +1137,24 @@ exports.apply = (ctx, config = {}) => {
     .action(async ({ session }, item) => {
       if (!item || !item.trim()) return '请指定要装备的物品名'
       const result = await shop.equip(session.userId, item.trim())
-      if (!result.success || !finalConfig.imageEquipResult || !hasPuppeteer(ctx)) {
+      if (!result.success) {
         return result.message
       }
 
-      try {
-        return await renderEquipResultCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐装备结果',
+        imageKey: 'imageEquipResult',
+        imageEnabled: finalConfig.imageEquipResult,
+        textOutput: result.message,
+        detail: `item=${item.trim()}`,
+        render: () => renderEquipResultCard(ctx, {
           data: {
             itemName: item.trim(),
             message: result.message,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐装备结果卡片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return result.message
-        return '酒狐悄悄话: 装备结果卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 装备结果卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐使用 =====
@@ -1194,23 +1176,25 @@ exports.apply = (ctx, config = {}) => {
           }
         }
       }
-      if (!result.success || !finalConfig.imageUseResult || !hasPuppeteer(ctx)) {
+      if (!result.success) {
         return result.message
       }
 
-      try {
-        return await renderUseResultCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐使用结果',
+        imageKey: 'imageUseResult',
+        imageEnabled: finalConfig.imageUseResult,
+        textOutput: result.message,
+        detail: `item=${item.trim()}`,
+        render: () => renderUseResultCard(ctx, {
           data: {
             itemName: item.trim(),
             message: result.message,
             effect: result.effect,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐使用结果卡片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return result.message
-        return '酒狐悄悄话: 使用结果卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 使用结果卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐回忆 =====
@@ -1219,20 +1203,20 @@ exports.apply = (ctx, config = {}) => {
       const memoirData = memoir.getMemoirData(session.userId)
       const textOutput = memoir.getMemoir(session.userId)
 
-      if (!memoirData || !finalConfig.imageMemoir || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderMemoirCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐回忆',
+        imageKey: 'imageMemoir',
+        imageEnabled: finalConfig.imageMemoir,
+        textOutput,
+        extraChecks: [
+          { key: 'hasMemoirData', value: !!memoirData, ok: !!memoirData, reason: 'missing_memoir_data' },
+        ],
+        render: () => renderMemoirCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           data: memoirData,
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐回忆图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 回忆卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 回忆卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐成就 =====
@@ -1241,17 +1225,14 @@ exports.apply = (ctx, config = {}) => {
       const achievementData = achievements.getPanelData(session.userId)
       const textOutput = achievements.getPanel(session.userId)
 
-      if (!finalConfig.imageAchievement || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderAchievementCard(ctx, { data: achievementData })
-      } catch (err) {
-        logger.warn('[fox] 酒狐成就图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 成就卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐成就',
+        imageKey: 'imageAchievement',
+        imageEnabled: finalConfig.imageAchievement,
+        textOutput,
+        render: () => renderAchievementCard(ctx, { data: achievementData }),
+        fallbackMessage: '酒狐悄悄话: 成就卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐排行 =====
@@ -1265,17 +1246,14 @@ exports.apply = (ctx, config = {}) => {
           return `${prefix} ${entry.userId} - ${entry.points}点 (${entry.levelName})`
         })].join('\n')
 
-      if (!finalConfig.imageRanking || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderRankingCard(ctx, { data: rankingData })
-      } catch (err) {
-        logger.warn('[fox] 酒狐排行图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 排行卡片生成失败了，请稍后再试一次...'
-      }
+      return renderImageFeature({
+        feature: '酒狐排行',
+        imageKey: 'imageRanking',
+        imageEnabled: finalConfig.imageRanking,
+        textOutput,
+        render: () => renderRankingCard(ctx, { data: rankingData }),
+        fallbackMessage: '酒狐悄悄话: 排行卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐送礼 =====
@@ -1308,15 +1286,16 @@ exports.apply = (ctx, config = {}) => {
       await trackCommission(session, 'gift')
 
       const textOutput = `酒狐悄悄话: 已帮主人把心意传达给 ${targetId} 了！\n（你 -${giftCost}好感度，对方 +${giftBonus}好感度）`
-      if (!finalConfig.imageGiftResult || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
       const foxLines = responseData.actionResultQuotesGift || ['我会好好传达的。']
       const foxLine = require('./lib/utils').randomPick(foxLines)
 
-      try {
-        return await renderGiftResultCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐送礼结果',
+        imageKey: 'imageGiftResult',
+        imageEnabled: finalConfig.imageGiftResult,
+        textOutput,
+        detail: `target=${targetId}`,
+        render: () => renderGiftResultCard(ctx, {
           data: {
             tag: '社交',
             mainRows: [
@@ -1325,12 +1304,9 @@ exports.apply = (ctx, config = {}) => {
             suggestions: ['酒狐排行', '酒狐回忆'],
             foxLine,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐送礼结果卡片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 送礼结果卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 送礼结果卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐收藏 =====
@@ -1374,12 +1350,12 @@ exports.apply = (ctx, config = {}) => {
       }
       const periodKey = require('./lib/utils').getTimePeriod()
 
-      if (!finalConfig.imageWeather || !hasPuppeteer(ctx)) {
-        return textOutput
-      }
-
-      try {
-        return await renderWeatherCard(ctx, {
+      return renderImageFeature({
+        feature: '酒狐天气',
+        imageKey: 'imageWeather',
+        imageEnabled: finalConfig.imageWeather,
+        textOutput,
+        render: () => renderWeatherCard(ctx, {
           data: {
             title: '酒狐天气',
             status: weatherData.name,
@@ -1387,12 +1363,9 @@ exports.apply = (ctx, config = {}) => {
             body: weatherData.description,
             foxComment: weatherData.foxComment,
           },
-        })
-      } catch (err) {
-        logger.warn('[fox] 酒狐天气图片渲染失败', err)
-        if (finalConfig.imageFallbackToText) return textOutput
-        return '酒狐悄悄话: 天气卡片生成失败了，请稍后再试一次...'
-      }
+        }),
+        fallbackMessage: '酒狐悄悄话: 天气卡片生成失败了，请稍后再试一次...',
+      })
     })
 
   // ===== 酒狐委托 =====
