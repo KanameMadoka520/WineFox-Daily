@@ -1315,6 +1315,8 @@ exports.apply = (ctx, config = {}) => {
         render: () => renderBuyResultCard(ctx, {
           data: {
             tag: '商店',
+            itemId: result._itemId,
+            itemName,
             mainRows: [
               { label: '物品', value: itemName, muted: `消耗狐狐券 ${result.cost} 张` },
               { label: '类型', value: itemType === 'equip' ? '装备' : '消耗品' },
@@ -1360,6 +1362,7 @@ exports.apply = (ctx, config = {}) => {
         detail: `item=${item.trim()}`,
         render: () => renderEquipResultCard(ctx, {
           data: {
+            itemId: result.itemId || item.trim(),
             itemName: item.trim(),
             message: result.message,
           },
@@ -1399,6 +1402,7 @@ exports.apply = (ctx, config = {}) => {
         detail: `item=${item.trim()}`,
         render: () => renderUseResultCard(ctx, {
           data: {
+            itemId: result.itemId || item.trim(),
             itemName: item.trim(),
             message: result.message,
             effect: result.effect,

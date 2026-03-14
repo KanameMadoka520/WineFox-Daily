@@ -58,6 +58,18 @@ module.exports = [
     effectText: '（酒狐头上的花冠散发着淡淡花香~）',
     bonus: { type: 'checkin_ticket_bonus', value: 3 },
   },
+  {
+    id: 'fox_brooch',
+    name: '狐尾胸针',
+    type: 'equip',
+    levelRequired: 2,
+    price: 55,
+    description: '一枚小巧的狐尾胸针，别在衣襟上时，会让酒狐连被动冒泡都更温柔一点。',
+    buyLine: '酒狐悄悄话: 小胸针上有毛绒绒的小尾巴！好可爱...酒狐想把它别在最显眼的地方~',
+    equipLine: '酒狐悄悄话: 胸针别好了~每次低头的时候都会看到它，心情也会变得柔软一点。',
+    effectText: '（狐尾胸针在衣襟前轻轻晃动着~）',
+    bonus: { type: 'passive_affinity_bonus', value: 1 },
+  },
 
   // ===== 进阶装备 (Lv4) =====
   {
@@ -95,6 +107,18 @@ module.exports = [
     equipLine: '酒狐悄悄话: 铃铛戴好了！每次摇头都会发出好听的声音~叮铃♪',
     effectText: '（酒狐耳朵上的铃铛叮铃作响~）',
     bonus: { type: 'rare_chance_bonus', value: 0.03 },
+  },
+  {
+    id: 'tea_cape',
+    name: '午茶披肩',
+    type: 'equip',
+    levelRequired: 4,
+    price: 155,
+    description: '带着奶茶香气的小披肩，让酒狐在日常互动时更容易多给一点好感。',
+    buyLine: '酒狐悄悄话: 披肩软软的，还香香的...像刚泡好的奶茶！酒狐喜欢这个味道~',
+    equipLine: '酒狐悄悄话: 午茶披肩披好了~今天和主人说话的时候，会更想靠近一点。',
+    effectText: '（带着暖香的小披肩轻轻搭在酒狐肩上~）',
+    bonus: { type: 'affinity_bonus', value: 1 },
   },
 
   // ===== 高级装备 (Lv6) =====
@@ -145,6 +169,18 @@ module.exports = [
     equipLine: '酒狐悄悄话: 酒壶挂在腰间了！随时随地都能来一口~嘿嘿',
     effectText: '（酒狐摸了摸腰间的酒壶，美滋滋~）',
     bonus: { type: 'brew_time_reduction', value: 0.25 },
+  },
+  {
+    id: 'silver_compass',
+    name: '银羽罗盘',
+    type: 'equip',
+    levelRequired: 6,
+    price: 380,
+    description: '指针会追着月光转动的罗盘，让酒狐更容易在群里捕捉到有趣的话题。',
+    buyLine: '酒狐悄悄话: 罗盘上的羽毛纹好漂亮...感觉它会带酒狐找到很多有趣的话题！',
+    equipLine: '酒狐悄悄话: 银羽罗盘挂好了~要是群里出现了好玩的事，酒狐一定会第一时间发现！',
+    effectText: '（银羽罗盘的指针轻轻摆动，像在追逐风声~）',
+    bonus: { type: 'passive_chance_bonus', value: 0.08 },
   },
 
   // ===== 传说装备 (Lv8) =====
@@ -208,6 +244,18 @@ module.exports = [
     effectText: '（虚空冠冕在酒狐额前泛起幽深的星辉~）',
     bonus: { type: 'affinity_bonus', value: 3 },
   },
+  {
+    id: 'aurora_feather',
+    name: '极光羽带',
+    type: 'equip',
+    levelRequired: 8,
+    price: 1080,
+    description: '缀着极光色羽毛的发带，戴上后酒狐在签到和委托时都更容易带回额外狐狐券。',
+    buyLine: '酒狐悄悄话: 这条羽带像把极光编在了一起...主人眼光也太好了吧。',
+    equipLine: '酒狐悄悄话: 极光羽带系好了~今天的风都像带着一点亮晶晶的颜色。',
+    effectText: '（极光色的羽带在酒狐耳边轻轻闪动~）',
+    bonus: { type: 'checkin_ticket_bonus', value: 5 },
+  },
 
   // ===== 日用消耗品 =====
   {
@@ -264,6 +312,17 @@ module.exports = [
     buyLine: '酒狐悄悄话: 哎？要赌命运硬币吗？酒狐突然有点紧张了...',
     useLine: '酒狐悄悄话: 叮——硬币在空中翻转了好多圈，命运会站在哪一边呢？',
     effect: 'fate_coin',
+  },
+  {
+    id: 'berry_jelly',
+    name: '莓果冻',
+    type: 'consumable',
+    levelRequired: 2,
+    price: 16,
+    description: '晃起来像宝石一样的莓果冻，吃掉后酒狐会开心得想多说几句话。',
+    buyLine: '酒狐悄悄话: 这个颜色好漂亮！像红宝石一样一颤一颤的，酒狐好想尝尝~',
+    useLine: '酒狐悄悄话: 啊呜——酸酸甜甜的！酒狐现在心情超级好，尾巴都想跟着晃起来了！',
+    effect: 'mood_happy',
   },
 
   // ===== 战略消耗品 =====
@@ -322,6 +381,17 @@ module.exports = [
     useLine: '酒狐悄悄话: 沙粒逆流了！酒香一下子就浓起来了...好像时间被揉皱了一样。',
     effect: 'time_reverse',
   },
+  {
+    id: 'cloud_cookie',
+    name: '云朵曲奇',
+    type: 'consumable',
+    levelRequired: 4,
+    price: 34,
+    description: '像小云朵一样酥软的曲奇，吃掉后会让酒狐懒洋洋地想贴着主人休息。',
+    buyLine: '酒狐悄悄话: 曲奇居然做成了云朵的形状！看起来就软绵绵的，好可爱~',
+    useLine: '酒狐悄悄话: 嚼起来松松的...像一口咬在云朵上。酒狐突然有点想犯懒，靠着主人休息一会儿...',
+    effect: 'mood_lazy',
+  },
 
   // ===== 高级消耗品 =====
   {
@@ -369,6 +439,17 @@ module.exports = [
     effect: 'random_rare',
   },
   {
+    id: 'starlight_cider',
+    name: '星砂苹果酒',
+    type: 'consumable',
+    levelRequired: 6,
+    price: 68,
+    description: '撒着星砂的苹果酒，入口会暖暖发亮，让酒狐微醺又开心。',
+    buyLine: '酒狐悄悄话: 酒液里像漂着细小的星光...这瓶酒看起来就很适合晚上慢慢喝。',
+    useLine: '酒狐悄悄话: 唔...甜甜的，后面又有一点点发烫。酒狐现在脸颊都有点热起来了~',
+    effect: 'mood_tipsy',
+  },
+  {
     id: 'dragon_breath',
     name: '龙息药水',
     type: 'consumable',
@@ -378,5 +459,16 @@ module.exports = [
     buyLine: '酒狐悄悄话: 这股气息...有点危险...但主人如果坚持，酒狐愿意陪你一起赌。',
     useLine: '酒狐悄悄话: 呼...这口气息像火焰一样划过喉咙。结果会变成什么，就交给命运吧。',
     effect: 'dragon_breath',
+  },
+  {
+    id: 'mooncake_box',
+    name: '月酿点心盒',
+    type: 'consumable',
+    levelRequired: 8,
+    price: 118,
+    description: '装着几块月光色点心的礼盒，打开后总会掉出一点稀有的小惊喜。',
+    buyLine: '酒狐悄悄话: 这个盒子摸起来凉凉的...里面不会装着月亮吧？酒狐有点期待了。',
+    useLine: '酒狐悄悄话: 打开盒子的瞬间，香气一下子就飘出来了...酒狐好像也跟着想起了一点珍贵的小秘密。',
+    effect: 'random_rare',
   },
 ]

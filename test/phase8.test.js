@@ -85,6 +85,17 @@ async function testTicketRewardLedgerClaimLimit() {
   assert.strictEqual(second.exhausted, true, '达到上限后应标记为 exhausted')
 }
 
+async function testShopItemsExpandedAndIconCovered() {
+  const items = require('../data/shop_items')
+  const { getItemIconSpec } = require('../lib/card-renderer')
+
+  assert.ok(items.length >= 38, '商店商品数量应扩充到至少 38 件')
+  for (const item of items) {
+    const spec = getItemIconSpec(item.id)
+    assert.ok(spec && spec.kind, `商品 ${item.id} 应有对应的图标规格`)
+  }
+}
+
 async function main() {
   const tests = [
     ['commission data', testCommissionData],
@@ -93,6 +104,7 @@ async function main() {
     ['rps carries card fields', testRpsCarriesCardFields],
     ['search with meta and stats', testSearchWithMetaAndStats],
     ['ticket reward ledger limit', testTicketRewardLedgerClaimLimit],
+    ['shop items expanded and icon covered', testShopItemsExpandedAndIconCovered],
   ]
 
   let failed = 0
