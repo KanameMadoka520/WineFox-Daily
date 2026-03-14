@@ -477,11 +477,9 @@ exports.apply = (ctx, config = {}) => {
           ],
         },
         {
-          title: '社交互动',
+          title: '互动动作',
           items: [
             ['酒狐成就', '成就徽章'],
-            ['酒狐排行', '好感度排行榜'],
-            ['酒狐送礼 @某人', '送好感'],
             ['酒狐回忆', '回忆录时间线'],
             [formatHelpItem('酒狐摸头', '摸头', freeCommands), '摸摸酒狐的头'],
             [formatHelpItem('酒狐拥抱', '拥抱', freeCommands), '给酒狐一个拥抱'],
@@ -489,6 +487,13 @@ exports.apply = (ctx, config = {}) => {
             [formatHelpItem('酒狐喂酒', '喂酒', freeCommands), '给酒狐喂酒'],
             [formatHelpItem('酒狐挠耳朵', '挠耳朵', freeCommands), '挠挠酒狐的耳朵'],
             [formatHelpItem('酒狐牵手', '牵手', freeCommands), '牵着酒狐的手'],
+          ],
+        },
+        {
+          title: '收藏与排行',
+          items: [
+            ['酒狐排行', '好感度排行榜'],
+            ['酒狐送礼 @某人', '送好感'],
             ['酒狐收藏', '收藏语录'],
             ['酒狐收藏夹', '查看收藏'],
             ['酒狐取消收藏 <编号>', '删除收藏'],
