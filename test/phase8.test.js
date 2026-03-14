@@ -141,6 +141,29 @@ async function testShopItemsExpandedAndIconCovered() {
   }
 }
 
+async function testRareQuotesExist() {
+  const QuotesLoader = require('../lib/quotes-loader')
+  const loader = new QuotesLoader('/app/WineFox-Daily/data/quotes.txt', console)
+  assert.strictEqual(loader.load(), true, '主语录库应成功加载')
+  assert.ok(loader.getTotalRareCount() >= 10, '主语录库应至少包含 10 条稀有语录')
+}
+
+async function testAffinityReportsActualAdded() {
+  const AffinitySystem = require('../lib/affinity')
+  const memDir = '/tmp/wf_phase8_affinity_cap'
+  if (fs.existsSync(memDir)) fs.rmSync(memDir, { recursive: true, force: true })
+  fs.mkdirSync(memDir, { recursive: true })
+
+  const affinity = new AffinitySystem(memDir, console, { dailyAffinityMax: 3 })
+  const user = affinity._getUserData('u1')
+  user.lastDate = new Date().toISOString().slice(0, 10)
+  user.dailyCount = 2
+
+  const result = await affinity.addPoints('u1', 3)
+  assert.strictEqual(result.actualAdded, 1, '达到每日上限前应返回真实增加值')
+  assert.strictEqual(result.capped, true, '部分被上限截断时应标记 capped')
+}
+
 async function main() {
   const tests = [
     ['commission data', testCommissionData],
@@ -152,6 +175,8 @@ async function main() {
     ['search with meta and stats', testSearchWithMetaAndStats],
     ['ticket reward ledger limit', testTicketRewardLedgerClaimLimit],
     ['shop items expanded and icon covered', testShopItemsExpandedAndIconCovered],
+    ['rare quotes exist', testRareQuotesExist],
+    ['affinity reports actual added', testAffinityReportsActualAdded],
   ]
 
   let failed = 0
