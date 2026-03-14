@@ -1,171 +1,211 @@
 # 贡献指南 - 酒狐悄悄话增强版 v2.3
 
-感谢你对酒狐悄悄话项目的关注！以下是参与贡献的指南。
+感谢你参与 WineFox-Daily 的维护与扩展。当前项目已经进入 **v2.3 主线**，核心业务、图片卡片和主题切换都已落地，因此贡献时请特别注意“规则一致性”和“图片层一致性”。
 
 ---
 
-## 如何贡献文案内容
+## 一、当前贡献重点
 
-v2.3 继续采用 **代码与文案分离** 架构。所有台词、语录、回复文案都存放在 `data/` 目录下的独立文件中，每个文件顶部都有详细的中文注释说明格式。**改文案不需要碰任何 `lib/` 里的代码。**
+当前最适合贡献的方向：
 
-同时需要注意，v2.3 比 v2.2 增加了更多和“系统规则”强绑定的文案场景，因此在改文案时要特别区分：
-- **纯表现文案**：可以直接调整措辞、风格、数量
-- **规则提示文案**：必须与当前机制保持一致，不能只改文字不看逻辑
+- 扩充 `data/` 中的语录、故事、天气、问答、商店文案
+- 继续补齐图片卡片或继续优化现有卡片比例
+- 优化宿主联调体验和图片性能
+- 修复业务逻辑与文案不一致的问题
 
-### 可编辑的数据文件一览
+当前不适合随意改动的方向：
 
-| 文件 | 内容 | 怎么改 |
-|------|------|--------|
-| `data/quotes.txt` | 主语录库 | 一行一条，`[分类名]` 标分类，`[RARE]` 标稀有 |
-| `data/stories.txt` | 酒狐冒险日记（100篇） | 同上，但每段故事之间用空行分隔 |
-| `data/poke_responses.js` | 戳一戳回复（50条） | JS 数组，增删字符串即可 |
-| `data/keyword_triggers.js` | 群聊关键词冒泡表（30组） | 增删关键词、调 chance 概率 |
-| `data/festival_quotes.js` | 节日专属语录（13节日各6条） | 按节日名添加语录数组 |
-| `data/fortune_data.js` | 占卜数据（宜101/忌81/色85/方位40） | 增删条目丰富占卜结果 |
-| `data/responses.js` | 统一台词库（含10级升级台词、互动回复、猜拳台词、御神签、签到、回忆录） | 按分组扩充或修改，注意与等级/机制同步 |
-| `data/mood_decorators.js` | 心情修饰词（每种15前缀+15后缀） | 按心情类型增删前缀/后缀 |
-| `data/weather_data.js` | 天气类型（15种各10条描述） | 可添加新天气或增加描述/评语 |
-| `data/shop_items.js` | **v2.3** 商店物品（15装备+15消耗品） | 修改价格、门槛、装备 bonus、消耗品 effect 时必须同步检查逻辑 |
-| `data/commission_data.js` | **v2.3** 委托模板池 | 增删委托类型、奖励、事件类型，注意保持 event 与代码一致 |
+- 擅自改动双货币规则
+- 擅自改动 10 级好感曲线
+- 擅自修改委托 event 名、装备 bonus 类型、图片主题 id
 
-### 通过 QQ 机器人投稿语录（推荐）
+---
 
-在群聊中直接使用指令：
+## 二、文案贡献
 
-```
-酒狐投稿 你想投稿的语录内容
-```
+项目继续采用 **代码与文案分离**。
 
-管理员审核通过后，语录会自动入库。
+- `lib/` 只放逻辑
+- `data/` 只放文案和数据
+- 改文案通常不需要修改 `lib/`
 
-### 通过编辑文件
+### 可编辑的数据文件
 
-1. 打开 `data/quotes.txt`
-2. 在对应分类标记下添加新语录
-3. 格式：`酒狐悄悄话: 你的语录内容`
-4. 使用 `酒狐重载` 指令让机器人重新加载
+| 文件 | 内容 | 注意事项 |
+|------|------|----------|
+| `data/quotes.txt` | 主语录库 | `[分类名]` 标分类，`[RARE]` 标稀有 |
+| `data/stories.txt` | 故事库 | 故事之间用空行分隔 |
+| `data/poke_responses.js` | 戳一戳回复 | 直接增删字符串 |
+| `data/keyword_triggers.js` | 关键词冒泡表 | 改关键词时注意概率和 search 字段 |
+| `data/festival_quotes.js` | 节日语录 | 节日名必须与逻辑一致 |
+| `data/fortune_data.js` | 占卜数据 | 可继续丰富结果池 |
+| `data/responses.js` | 统一台词库 | 含升级、互动、签到、结果卡文案等 |
+| `data/mood_decorators.js` | 心情修饰词 | - |
+| `data/weather_data.js` | 天气数据 | - |
+| `data/quiz_data.js` | 问答题库 | 注意答案索引正确 |
+| `data/brewing_recipes.js` | 酿酒配方 | 文案应与狐狐券语义一致 |
+| `data/shop_items.js` | 商店物品 | 改 bonus / effect 时要同步确认逻辑支持 |
+| `data/commission_data.js` | 委托模板池 | `event` 名必须与代码中的事件上报一致 |
+| `data/card_themes.js` | 图片主题定义 | 主题 id、name、alias 要保持稳定 |
 
 ### 语录编写规范
 
-- 保持酒狐的人设：可爱、忠诚、有点傲娇、爱喝酒的狐狸女仆
-- 语录开头统一使用 `酒狐悄悄话: ` 前缀
-- 稀有语录在行尾加 `[RARE]` 或 `#rare` 标记
-- 控制长度在 10-100 字之间为佳
-- 避免包含敏感或不当内容
-- 可以引用 Minecraft 或模组相关内容，增加代入感
-- 如果是 Minecraft 服务器专属内容，可使用颜色代码（`&d`, `&f` 等）
+- 保持酒狐人设：可爱、忠诚、有点傲娇、爱喝酒的狐狸女仆
+- 语录建议统一以 `酒狐悄悄话: ` 起头
+- 稀有语录使用 `[RARE]` 或 `#rare`
+- 控制长度在 10-100 字为宜
+- 避免敏感或不当内容
+- 如果文案涉及规则提示，必须先确认代码真实逻辑
+
+### QQ 机器人投稿
+
+推荐直接使用：
+
+```text
+酒狐投稿 你想投稿的语录内容
+```
+
+管理员审核通过后会自动入库。
 
 ---
 
-## 如何贡献代码
+## 三、代码贡献
 
 ### 项目结构
 
 ```
 WineFox-Daily/
-├── index.js              主入口，初始化和注册指令
-├── runtime_config.js     运行时配置（带中文注释）
-├── lib/                  功能模块（逻辑代码）
-├── data/                 文案数据（台词/语录/回复，改文案在这里）
-└── memory/               运行时存档（不要提交此目录的内容）
+├── index.js
+├── runtime_config.js
+├── lib/
+├── data/
+├── memory/
+└── test/
 ```
 
-**核心原则：代码与文案分离。** `lib/` 只放逻辑，`data/` 只放文案内容。新功能涉及文案池的，必须把文案提取到 `data/` 下的独立文件中，通过 `require('../data/xxx')` 加载。
+### 开发规则
 
-### 开发规范
+1. 新功能逻辑放到 `lib/` 独立模块，不要堆到 `index.js`
+2. 所有可编辑文案、数据池放到 `data/`
+3. 文件名使用 kebab-case，变量使用 camelCase
+4. 日志统一使用 `ctx.logger('fox')`
+5. 需要持久化的数据放进 `memory/`
+6. 可调参数必须同时更新：
+   - `index.js` 中的 `exports.Config`
+   - `runtime_config.js`
+7. 所有运行时写入都要用 `withLock`
+8. 启动阶段读取必须同步
+9. 兼容 Koishi v4+，Schema 必须直接从 `require('koishi')` 导入
 
-1. **模块化**：新功能请在 `lib/` 下创建独立模块，然后在 `index.js` 中引入
-2. **文案分离**：所有台词、回复、数据池放 `data/` 目录下独立 `.js` 文件，顶部写中文注释说明格式
-3. **命名风格**：文件名使用 kebab-case，变量使用 camelCase
-4. **日志**：使用 `ctx.logger('fox')` 输出日志，不要使用 `console.log`
-5. **持久化**：需要保存数据的功能，将 JSON 文件存放到 `memory/` 目录
-6. **配置项**：可调参数加入 `exports.Config` 的 Schema 定义 + `runtime_config.js`
-7. **错误处理**：所有文件 I/O 操作都要 try-catch，不能让插件崩溃
-8. **兼容性**：确保兼容 Koishi v4+。**配置项定义必须直接引入并使用 `koishi` 核心库导出的 `Schema` 对象**，严禁使用已弃用的 `ctx.schema`
-9. **生命周期与并发安全（核心原则）**：
-   - **启动读取必须同步**：涉及到插件启动时的数据初始化读取（如各种 `_load()` 方法），**必须使用同步方法**（如 `fs.readFileSync`）。严禁在类的构造函数中调用异步读取，以防出现竞态条件（Race Condition）导致数据加载完成前被新的群聊交互事件覆盖，造成本地存档永久丢失。
-   - **运行时写入必须异步加锁**：任何运行时的文件写入/保存操作（如 `_save()`、`append()`），**必须保持异步并使用内置的 `withLock` 队列锁包裹**，绝对保证高并发群聊环境下的文件 I/O 安全与读写分离。
+### 图片卡片相关约定
 
-### 新模块开发模板
+当前图片卡片统一遵循：
 
-```javascript
-// lib/新模块.js - 逻辑代码
-const fs = require('fs')
-const path = require('path')
-const { withLock } = require('./io-lock')
-const MY_DATA = require('../data/my-data')  // 文案从 data/ 加载
+- 渲染器全部放在 `lib/card-renderer.js`
+- 指令接线统一通过 `renderImageFeature()`
+- 图片失败自动回退文字
+- 后台要保留条件检查 / 渲染开始 / 渲染成功 / 回退原因日志
 
-class NewSystem {
-  constructor(memoryDir, logger, config = {}) {
-    this.savePath = path.join(memoryDir, 'new-system.json')
-    this.logger = logger || console
-    this.config = { someOption: config.someOption ?? 默认值 }
-    this.data = {}
-    this._load()  // 必须同步！
-  }
+如果你新增图片卡片，建议遵循下面步骤：
 
-  _load() { /* fs.readFileSync 同步加载 */ }
-  async _save() { /* withLock + fs.promises.writeFile 异步保存 */ }
-}
+1. 在 `lib/对应模块.js` 中补结构化数据接口
+2. 在 `lib/card-renderer.js` 中新增 renderer
+3. 在 `index.js` 中通过 `renderImageFeature()` 接线
+4. 在 `exports.Config` 和 `runtime_config.js` 中补对应 `imageXxx` 开关
+5. 若需要，补测试到 `test/phase8.test.js` 或新测试文件
 
-module.exports = NewSystem
+### 主题系统约定
+
+主题相关逻辑当前分三层：
+
+- `data/card_themes.js`：主题定义
+- `lib/ui-theme.js`：当前主题持久化
+- `lib/card-renderer.js`：读取当前主题变量并渲染
+
+如果你新增主题：
+
+1. 在 `data/card_themes.js` 增加一个主题对象
+2. 保持唯一 `id`
+3. 提供 `name`、`aliases`、`description`
+4. 只改 CSS 变量，不要在 renderer 中写主题分支
+
+---
+
+## 四、测试与验证
+
+当前仓库内已有这些测试：
+
+- `test/phase3.test.js`
+- `test/phase4.test.js`
+- `test/phase5.test.js`
+- `test/phase6.test.js`
+- `test/phase7.test.js`
+- `test/phase8.test.js`
+- `test/ui-theme.test.js`
+
+建议每次改动后至少验证：
+
+```bash
+node test/phase3.test.js
+node test/phase4.test.js
+node test/phase5.test.js
+node test/phase6.test.js
+node test/phase7.test.js
+node test/phase8.test.js
+node test/ui-theme.test.js
 ```
 
-```javascript
-// data/my-data.js - 文案内容
-/**
- * 文件说明（中文注释）
- * 格式说明...
- */
-module.exports = {
-  // 文案内容
-}
-```
+如果你改了图片相关逻辑，还应在真实 Koishi 宿主里额外测试：
 
-### 在 index.js 中接入
+- `酒狐帮助`
+- `酒狐商店`
+- `酒狐故事`
+- `酒狐委托`
+- `酒狐UI`
 
-```javascript
-// 1. 顶部 require 模块
-const NewSystem = require('./lib/new-system')
+---
 
-// 2. 在 exports.apply 中初始化（传入 config）
-const newSystem = new NewSystem(memoryDir, logger, {
-  someOption: finalConfig.someOption,
-})
+## 五、依赖与仓库卫生
 
-// 3. 注册指令
-ctx.command('酒狐xxx', '功能描述')
-  .action(async ({ session }) => {
-    return newSystem.doSomething(session.userId)
-  })
+- `memory/` 不提交
+- `node_modules/` 不提交
+- 插件目录里的 `package-lock.json` 也不作为仓库必需文件
 
-// 4. 在 exports.Config Schema 中添加配置项
-// 5. 在 runtime_config.js 中添加默认值和中文注释
-// 6. 在「酒狐帮助」指令的输出中添加新指令条目
-```
+说明：
 
-### 提交规范
+- 本插件代码里只直接依赖 `koishi`
+- 正常部署时使用宿主 Koishi 项目的依赖即可
+- 插件目录里若出现 `node_modules/` 或 `package-lock.json`，通常是本地安装残留
 
-```
-feat: 新增XX功能
-fix: 修复XX问题
+---
+
+## 六、提交建议
+
+建议使用下列前缀：
+
+```text
+feat: 新增功能
+fix: 修复问题
 docs: 更新文档
-data: 新增/修改语录或台词
-refactor: 重构XX模块
+data: 更新文案或数据池
+style: 调整图片卡片或展示样式
+refactor: 重构逻辑
+chore: 维护性改动
 ```
 
 ---
 
-## 问题反馈
+## 七、问题反馈
 
-如果遇到 Bug 或有功能建议，请：
+提交问题时建议附带：
 
-1. 先检查是否已有相同的问题
-2. 提供复现步骤和错误日志
-3. 说明你的 Koishi 版本和 Node.js 版本
+1. 复现步骤
+2. 后台日志
+3. Koishi 版本和 Node.js 版本
+4. 若与图片有关，附带 `Puppeteer 服务可用` 和 `回退原因` 日志
 
 ---
 
-## 许可
+## 八、许可证
 
-贡献的代码和语录将遵循本项目的 MIT 许可证。
+贡献的代码和语录遵循本项目的 [MIT License](./LICENSE)。
