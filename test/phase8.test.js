@@ -70,6 +70,21 @@ async function testSearchWithMetaAndStats() {
   assert.strictEqual(stats.categoryCount, 2, '统计数据应返回分类数量')
 }
 
+async function testTicketRewardLedgerClaimLimit() {
+  const TicketRewardLedger = require('../lib/ticket-reward-ledger')
+  const memDir = '/tmp/wf_phase8_ticket_ledger'
+  if (fs.existsSync(memDir)) fs.rmSync(memDir, { recursive: true, force: true })
+  fs.mkdirSync(memDir, { recursive: true })
+
+  const ledger = new TicketRewardLedger(memDir, console)
+  const first = await ledger.claim('u1', '2026-03-14', 'daily_quote', 2, 1)
+  const second = await ledger.claim('u1', '2026-03-14', 'daily_quote', 2, 1)
+
+  assert.strictEqual(first.granted, 2, '第一次应成功领取奖励')
+  assert.strictEqual(second.granted, 0, '达到每日上限后不应继续领取')
+  assert.strictEqual(second.exhausted, true, '达到上限后应标记为 exhausted')
+}
+
 async function main() {
   const tests = [
     ['commission data', testCommissionData],
@@ -77,6 +92,7 @@ async function main() {
     ['omikuji carries text', testOmikujiCarriesText],
     ['rps carries card fields', testRpsCarriesCardFields],
     ['search with meta and stats', testSearchWithMetaAndStats],
+    ['ticket reward ledger limit', testTicketRewardLedgerClaimLimit],
   ]
 
   let failed = 0

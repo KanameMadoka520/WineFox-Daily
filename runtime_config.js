@@ -70,6 +70,7 @@ module.exports = {
   imageDailyQuote: true,
   imageOmikuji: true,
   imageRpsWinResult: true,
+  imageGuessResult: true,
   imageCategory: true,
   imageQuoteStats: true,
   imageEquipResult: true,
