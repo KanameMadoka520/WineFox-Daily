@@ -44,7 +44,7 @@
 | `data/weather_data.js` | 天气数据 | - |
 | `data/quiz_data.js` | 问答题库 | 注意答案索引正确 |
 | `data/brewing_recipes.js` | 酿酒配方 | 文案应与狐狐券语义一致 |
-| `data/shop_items.js` | 商店物品 | 改 bonus / effect 时要同步确认逻辑支持 |
+| `data/shop_items.js` | 商店物品 | 改 bonus / effect / 图标含义时必须同步检查逻辑支持 |
 | `data/commission_data.js` | 委托模板池 | `event` 名必须与代码中的事件上报一致 |
 | `data/card_themes.js` | 图片主题定义 | 主题 id、name、alias 要保持稳定 |
 
@@ -113,6 +113,22 @@ WineFox-Daily/
 3. 在 `index.js` 中通过 `renderImageFeature()` 接线
 4. 在 `exports.Config` 和 `runtime_config.js` 中补对应 `imageXxx` 开关
 5. 若需要，补测试到 `test/phase8.test.js` 或新测试文件
+
+### 商店与图标约定
+
+商店系统当前不仅有文案和价格，还有统一的 SVG 图标和效果接线：
+
+- 商品数据源：`data/shop_items.js`
+- 商店逻辑：`lib/shop.js`
+- 图标与商店卡渲染：`lib/card-renderer.js`
+- 高信息量效果接线：`index.js`
+
+如果你新增商品，请至少同步检查：
+
+1. 是否已有可复用的 `bonus.type` 或 `effect`
+2. 若新增 `effect`，是否已在 `酒狐使用` 路由里真正落地
+3. 是否已在 `lib/card-renderer.js` 的商品图标规格表中补图标
+4. 是否需要补测试（例如商品数量、效果持久化、图标覆盖）
 
 ### 主题系统约定
 
