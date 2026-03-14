@@ -77,7 +77,7 @@ const StorySystem = require('./lib/story')
 const AchievementSystem = require('./lib/achievements')
 const WeatherSystem = require('./lib/weather')
 const FavoritesSystem = require('./lib/favorites')
-const { registerInteractions } = require('./lib/interactions')
+const { registerInteractions, clearUserCooldowns } = require('./lib/interactions')
 
 // v2.2 新模块
 const CheckinSystem = require('./lib/checkin')
@@ -308,7 +308,11 @@ exports.apply = (ctx, config = {}) => {
   const quiz = new QuizSystem(memoryDir, logger)
   const brewing = new BrewingSystem(memoryDir, logger)
   const shop = new ShopSystem(memoryDir, logger)
-  const commission = new CommissionSystem(memoryDir, logger, affinity)
+  const commission = new CommissionSystem(memoryDir, logger, affinity, {
+    getCommissionBonus(userId) {
+      return shop.getEquippedBonus(userId, 'commission_bonus')
+    },
+  })
   const uiTheme = new UIThemeSystem(memoryDir, logger)
   const ticketRewardLedger = new TicketRewardLedger(memoryDir, logger)
   const appliedTheme = setCardTheme(uiTheme.getThemeId()) || getActiveCardThemeInfo()
@@ -384,7 +388,7 @@ exports.apply = (ctx, config = {}) => {
     if (result.completedTasks.length > 0) {
       const lines = ['\n\n-- 委托完成！ --']
       for (const task of result.completedTasks) {
-        lines.push(`${task.desc} (+${task.reward}狐狐券)`)
+        lines.push(`${task.desc} (+${task.actualReward || task.reward}狐狐券)`)
       }
       session.send(lines.join('\n'))
     }
@@ -402,11 +406,39 @@ exports.apply = (ctx, config = {}) => {
     return { ...claim, newTickets: affinity.getTickets(userId) }
   }
 
+  function getConsumableBoostMultiplier(userId) {
+    return shop.getEquippedBonus(userId, 'consumable_double') > 0 ? 2 : 1
+  }
+
+  async function consumeInteractionBonus(userId) {
+    let bonus = 0
+
+    const nextBonus = await shop.takeTempEffect(userId, 'next_affinity_bonus')
+    if (nextBonus) bonus += Number(nextBonus) || 0
+
+    const stackCount = Number(shop.getTempEffect(userId, 'stacked_affinity_bonus_count') || 0)
+    const stackValue = Number(shop.getTempEffect(userId, 'stacked_affinity_bonus_value') || 0)
+    if (stackCount > 0 && stackValue > 0) {
+      bonus += stackValue
+      await shop.decrementTempEffect(userId, 'stacked_affinity_bonus_count', 1)
+    }
+
+    return bonus
+  }
+
+  async function consumeGuaranteedRare(userId) {
+    const guaranteed = await shop.takeTempEffect(userId, 'guaranteed_rare')
+    return !!guaranteed
+  }
+
   // ===== 注册被动/搜索/分析/互动 =====
   registerPassive(ctx, quotesLoader, affinity, {
     ...finalConfig,
     getPassiveAffinityBonus(userId) {
       return shop.getEquippedBonus(userId, 'passive_affinity_bonus')
+    },
+    getPassiveChanceBonus(userId) {
+      return shop.getEquippedBonus(userId, 'passive_chance_bonus')
     },
   })
   registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, finalConfig, logger })
@@ -420,6 +452,9 @@ exports.apply = (ctx, config = {}) => {
   registerInteractions(ctx, affinity, mood, {
     headpatLevel: finalConfig.headpatLevel, hugLevel: finalConfig.hugLevel, confessLevel: finalConfig.confessLevel,
     feedDrinkLevel: finalConfig.feedDrinkLevel, scratchEarLevel: finalConfig.scratchEarLevel, holdHandLevel: finalConfig.holdHandLevel,
+    getCooldownReduction(userId) {
+      return shop.getEquippedBonus(userId, 'cooldown_reduction')
+    },
   })
 
   ctx.middleware((session, next) => {
@@ -617,10 +652,11 @@ exports.apply = (ctx, config = {}) => {
       }
 
       const userId = session.userId
+      const consumableAffinityBonus = await consumeInteractionBonus(userId)
       const affinityBonus = shop.getEquippedBonus(userId, 'affinity_bonus') + shop.getEquippedBonus(userId, 'all_affinity_bonus')
       const dailyCapBonus = shop.getEquippedBonus(userId, 'daily_cap_bonus')
       const decayImmune = shop.getEquippedBonus(userId, 'decay_immune') > 0
-      const affinityResult = await affinity.addPoints(userId, 1 + affinityBonus, { dailyCapBonus, decayImmune })
+      const affinityResult = await affinity.addPoints(userId, 1 + affinityBonus + consumableAffinityBonus, { dailyCapBonus, decayImmune })
       await trackAndNotify(session, 'interact')
       await trackCommission(session, 'interact')
 
@@ -654,8 +690,9 @@ exports.apply = (ctx, config = {}) => {
 
       let quote = pickByTime(quotesLoader, { timeAwareChance: finalConfig.timeAwareChance || 0.6 })
 
-      const rareChance = finalConfig.rareDropChance ?? 0.05
-      if (Math.random() < rareChance && quotesLoader.getTotalRareCount() > 0) {
+      const guaranteedRare = await consumeGuaranteedRare(userId)
+      const rareChance = (finalConfig.rareDropChance ?? 0.05) + shop.getEquippedBonus(userId, 'rare_chance_bonus')
+      if ((guaranteedRare || Math.random() < rareChance) && quotesLoader.getTotalRareCount() > 0) {
         const rareQuote = quotesLoader.getRandomRareQuote()
         if (rareQuote) {
           quote = `* 稀有掉落 *\n\n${rareQuote}`
@@ -675,17 +712,18 @@ exports.apply = (ctx, config = {}) => {
       const suffix = equipEffect ? '\n' + equipEffect : ''
 
       favorites.setLastReceived(userId, finalQuote)
-      return resOutput + decorated + suffix + `\n${affinity.formatProgressLine(userId, 1 + affinityBonus)}`
+      return resOutput + decorated + suffix + `\n${affinity.formatProgressLine(userId, 1 + affinityBonus + consumableAffinityBonus)}`
     })
 
   // ===== 每日酒狐 =====
   ctx.command('每日酒狐', '获取今日专属酒狐语录')
     .action(async ({ session }) => {
       if (quotesLoader.count === 0) return '主人，语录本不见了...'
+      const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
       const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
       const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
       const decayImmune = shop.getEquippedBonus(session.userId, 'decay_immune') > 0
-      const affinityResult = await affinity.addPoints(session.userId, 1 + affinityBonus, { dailyCapBonus, decayImmune })
+      const affinityResult = await affinity.addPoints(session.userId, 1 + affinityBonus + consumableAffinityBonus, { dailyCapBonus, decayImmune })
       const ticketGrant = await grantDailyTickets(session.userId, 'daily_quote')
       await trackAndNotify(session, 'interact')
       await trackCommission(session, 'interact')
@@ -693,7 +731,7 @@ exports.apply = (ctx, config = {}) => {
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
       favorites.setLastReceived(session.userId, quote)
-      const progressLine = affinity.formatProgressLine(session.userId, 1 + affinityBonus)
+      const progressLine = affinity.formatProgressLine(session.userId, 1 + affinityBonus + consumableAffinityBonus)
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
         : `\n（今日「每日酒狐」狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
@@ -782,11 +820,13 @@ exports.apply = (ctx, config = {}) => {
       const result = await checkin.checkin(session.userId)
       if (result.success) {
         await affinity.addBonusPoints(session.userId, result.reward)
-        const ticketResult = await affinity.addTickets(session.userId, result.ticketReward)
+        const checkinMultiplier = Number(await shop.takeTempEffect(session.userId, 'next_checkin_ticket_multiplier') || 1)
+        const finalTicketReward = result.ticketReward * checkinMultiplier + shop.getEquippedBonus(session.userId, 'checkin_ticket_bonus')
+        const ticketResult = await affinity.addTickets(session.userId, finalTicketReward)
         await trackAndNotify(session, 'checkin')
         await trackCommission(session, 'checkin')
 
-        const textOutput = `${result.message}\n狐狐券余额: ${ticketResult.newTickets}`
+        const textOutput = `${result.message.replace(/狐狐券奖励: \+\d+/, `狐狐券奖励: +${finalTicketReward}`)}\n狐狐券余额: ${ticketResult.newTickets}`
         const userData = checkin.getData(session.userId)
         const foxLines = responseData.actionResultQuotesCheckin || ['今天也辛苦啦。']
         const foxLine = require('./lib/utils').randomPick(foxLines)
@@ -801,7 +841,7 @@ exports.apply = (ctx, config = {}) => {
               tag: '今日奖励',
               mainRows: [
                 { label: '好感', value: `+${result.reward}`, muted: `连续 ${userData.streak} 天 · 累计 ${userData.totalDays} 天` },
-                { label: '狐狐券', value: `+${result.ticketReward}`, muted: `当前余额 ${ticketResult.newTickets} 张` },
+                { label: '狐狐券', value: `+${finalTicketReward}`, muted: `当前余额 ${ticketResult.newTickets} 张` },
               ],
               suggestions: ['酒狐签到日历', '酒狐好感'],
               foxLine,
@@ -967,12 +1007,13 @@ exports.apply = (ctx, config = {}) => {
     .action(async ({ session }) => {
       const gate = checkLevelGate(session, '抽签')
       if (gate) return gate
-      await affinity.addPoints(session.userId, 1)
+      const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
+      await affinity.addPoints(session.userId, 1 + consumableAffinityBonus)
       const ticketGrant = await grantDailyTickets(session.userId, 'omikuji')
       await trackAndNotify(session, 'interact')
       await trackCommission(session, 'interact')
       const omikuji = games.drawOmikuji()
-      const progressLine = affinity.formatProgressLine(session.userId, 1)
+      const progressLine = affinity.formatProgressLine(session.userId, 1 + consumableAffinityBonus)
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
         : `\n（今日抽签狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
@@ -999,7 +1040,8 @@ exports.apply = (ctx, config = {}) => {
   ctx.command('酒狐故事 [category:text]', '酒狐的冒险日记')
     .action(async ({ session }, category) => {
       logger.info('[fox] 酒狐故事请求开始')
-      await affinity.addPoints(session.userId, 1)
+      const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
+      await affinity.addPoints(session.userId, 1 + consumableAffinityBonus)
       const ticketGrant = await grantDailyTickets(session.userId, 'story')
       await trackAndNotify(session, 'story')
       await trackCommission(session, 'story')
@@ -1014,7 +1056,7 @@ exports.apply = (ctx, config = {}) => {
         }
 
         const storyData = await story.getStoryDataByCategory(catName)
-        const textOutput = (storyData?.text || '这个分类暂时没有故事了...') + ticketLine + `\n${affinity.formatProgressLine(session.userId, 1)}`
+        const textOutput = (storyData?.text || '这个分类暂时没有故事了...') + ticketLine + `\n${affinity.formatProgressLine(session.userId, 1 + consumableAffinityBonus)}`
         return renderImageFeature({
           feature: '酒狐故事',
           imageKey: 'imageStory',
@@ -1030,7 +1072,7 @@ exports.apply = (ctx, config = {}) => {
       }
 
       const storyData = await story.getRandomStoryData()
-      const textOutput = `${storyData.text}${ticketLine}\n${affinity.formatProgressLine(session.userId, 1)}`
+      const textOutput = `${storyData.text}${ticketLine}\n${affinity.formatProgressLine(session.userId, 1 + consumableAffinityBonus)}`
       return renderImageFeature({
         feature: '酒狐故事',
         imageKey: 'imageStory',
@@ -1092,13 +1134,31 @@ exports.apply = (ctx, config = {}) => {
     if (result.correct) {
       await affinity.addPoints(session.userId, result.reward)
       const ticketGrant = await grantDailyTickets(session.userId, 'quiz_correct')
+      const quizTicketBonus = shop.getEquippedBonus(session.userId, 'quiz_ticket_bonus')
+      let finalTicketReward = ticketGrant.granted
+      let finalTickets = ticketGrant.newTickets
+      if (quizTicketBonus > 0 && ticketGrant.granted > 0) {
+        const extra = await affinity.addTickets(session.userId, quizTicketBonus)
+        finalTicketReward += quizTicketBonus
+        finalTickets = extra.newTickets
+      }
       await trackAndNotify(session, 'quiz_correct')
       await trackCommission(session, 'quiz_correct')
-      const ticketLine = ticketGrant.granted > 0
-        ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
-        : `\n（今日问答狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
+      const ticketLine = finalTicketReward > 0
+        ? `\n狐狐券 +${finalTicketReward} (当前 ${finalTickets} 张)`
+        : `\n（今日问答狐狐券已领满，当前 ${finalTickets} 张）`
       return result.message + ticketLine + `\n${affinity.formatProgressLine(session.userId, result.reward)}`
     } else {
+      const enchantProtect = await shop.takeTempEffect(session.userId, 'quiz_protect')
+      if (enchantProtect) {
+        const protectedReward = 3
+        await affinity.addPoints(session.userId, protectedReward)
+        const ticketGrant = await grantDailyTickets(session.userId, 'quiz_correct')
+        const ticketLine = ticketGrant.granted > 0
+          ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
+          : `\n（今日问答狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
+        return result.message + '\n（附魔之书生效：这次答错没有扣好感，奖励照常发放。）' + ticketLine + `\n${affinity.formatProgressLine(session.userId, protectedReward)}`
+      }
       await affinity.removePoints(session.userId, 1)
       await achievements.recordEvent(session.userId, 'quiz_wrong')
       return result.message + `\n${affinity.formatProgressLine(session.userId, -1)}`
@@ -1196,7 +1256,8 @@ exports.apply = (ctx, config = {}) => {
           return `酒狐悄悄话: 狐狐券不够消耗呢...需要 ${result.cost} 张，主人当前只有 ${spend.newTickets} 张。`
         }
       }
-      await brewing.confirmBrewing(session.userId, result._recipeName, shop.getEquippedBonus(session.userId, 'brew_time_reduction'))
+      const brewQualityBoost = shop.getEquippedBonus(session.userId, 'brew_quality_bonus') + Number(await shop.takeTempEffect(session.userId, 'next_brew_quality_boost') || 0)
+      await brewing.confirmBrewing(session.userId, result._recipeName, shop.getEquippedBonus(session.userId, 'brew_time_reduction'), brewQualityBoost)
       const textOutput = result.message
       return renderImageFeature({
         feature: '酒狐酿酒结果',
@@ -1376,17 +1437,85 @@ exports.apply = (ctx, config = {}) => {
     .action(async ({ session }, item) => {
       if (!item || !item.trim()) return '请指定要使用的物品名'
       const result = await shop.useItem(session.userId, item.trim())
+      const multiplier = getConsumableBoostMultiplier(session.userId)
+      const extraLines = []
+
       if (result.success && result.effect) {
         if (result.effect === 'mood_happy') mood.onEvent('happy')
         else if (result.effect === 'mood_lazy') mood.onEvent('lazy')
         else if (result.effect === 'mood_tipsy') mood.onEvent('tipsy')
-        else if (result.effect === 'random_rare' && quotesLoader.getTotalRareCount() > 0) {
+        else if (result.effect === 'cake_plus') {
+          const bonus = 2 * multiplier
+          await affinity.addBonusPoints(session.userId, bonus)
+          extraLines.push(`额外好感 +${bonus}`)
+        } else if (result.effect === 'next_affinity_boost_small') {
+          const bonus = 1 * multiplier
+          await shop.setTempEffect(session.userId, 'next_affinity_bonus', bonus)
+          extraLines.push(`下一次互动额外好感 +${bonus}`)
+        } else if (result.effect === 'cooldown_reset') {
+          clearUserCooldowns(session.userId)
+          extraLines.push('互动冷却已全部重置')
+        } else if (result.effect === 'fate_coin') {
+          if (Math.random() < 0.5) {
+            const tickets = 10 * multiplier
+            const ticketResult = await affinity.addTickets(session.userId, tickets)
+            extraLines.push(`命运偏向好运，狐狐券 +${tickets} (当前 ${ticketResult.newTickets} 张)`)
+          } else {
+            const penalty = 2
+            await affinity.removePoints(session.userId, penalty)
+            extraLines.push(`命运偏向坏运，好感 -${penalty}`)
+          }
+        } else if (result.effect === 'double_checkin') {
+          await shop.setTempEffect(session.userId, 'next_checkin_ticket_multiplier', 2)
+          extraLines.push('下一次签到的狐狐券奖励将翻倍')
+        } else if (result.effect === 'luck_boost') {
+          const boost = multiplier > 1 ? 0.4 : 0.2
+          await shop.setTempEffect(session.userId, 'next_brew_quality_boost', boost)
+          extraLines.push('下一次开瓶更容易提升品质')
+        } else if (result.effect === 'guaranteed_rare') {
+          await shop.setTempEffect(session.userId, 'guaranteed_rare', 1)
+          extraLines.push('下一次互动必定触发稀有语录')
+        } else if (result.effect === 'enchant_book') {
+          await shop.setTempEffect(session.userId, 'quiz_protect', 1)
+          extraLines.push('下一次问答答错不会扣好感，并照常拿奖励')
+        } else if (result.effect === 'time_reverse') {
+          const success = await brewing.finishNow(session.userId)
+          extraLines.push(success ? '正在酿造的酒已被立刻完成' : '当前没有正在酿造的酒，效果静静散去了')
+        } else if (result.effect === 'golden_apple') {
+          const currentCount = Number(shop.getTempEffect(session.userId, 'stacked_affinity_bonus_count') || 0)
+          const currentValue = Number(shop.getTempEffect(session.userId, 'stacked_affinity_bonus_value') || 0)
+          await shop.setTempEffect(session.userId, 'stacked_affinity_bonus_count', currentCount + 5)
+          await shop.setTempEffect(session.userId, 'stacked_affinity_bonus_value', Math.max(currentValue, multiplier))
+          extraLines.push(`接下来 5 次互动额外好感 +${multiplier}`)
+        } else if (result.effect === 'mystery_potion') {
+          const pool = ['fortune', 'story', 'favorite', 'rps_play']
+          const pickedEvent = require('./lib/utils').randomPick(pool)
+          await achievements.recordEvent(session.userId, pickedEvent, 1)
+          extraLines.push(`一项成就进度被神秘推进了（${pickedEvent}）`)
+        } else if (result.effect === 'teleport_pearl') {
+          const bonus = 4 * multiplier
+          await affinity.addBonusPoints(session.userId, bonus)
+          extraLines.push(`瞬间拉近距离，好感 +${bonus}`)
+        } else if (result.effect === 'dragon_breath') {
+          if (Math.random() < 0.6) {
+            const bonus = 6 * multiplier
+            const tickets = 8 * multiplier
+            await affinity.addBonusPoints(session.userId, bonus)
+            const ticketResult = await affinity.addTickets(session.userId, tickets)
+            await shop.setTempEffect(session.userId, 'guaranteed_rare', 1)
+            extraLines.push(`龙息爆发成功：好感 +${bonus}，狐狐券 +${tickets} (当前 ${ticketResult.newTickets} 张)，并获得下一次稀有保底`)
+          } else {
+            const penalty = 3
+            await affinity.removePoints(session.userId, penalty)
+            extraLines.push(`龙息失控了...好感 -${penalty}`)
+          }
+        } else if (result.effect === 'random_rare' && quotesLoader.getTotalRareCount() > 0) {
           const rareQuote = quotesLoader.getRandomRareQuote()
           if (rareQuote) {
             const isNew = await affinity.unlockRare(session.userId, rareQuote)
             let extra = `\n\n* 稀有语录 *\n${rareQuote}`
             if (isNew) extra += '\n(已收录至「酒狐图鉴」)'
-            return result.message + extra
+            extraLines.push(extra.trim())
           }
         }
       }
@@ -1394,17 +1523,21 @@ exports.apply = (ctx, config = {}) => {
         return result.message
       }
 
+      const finalMessage = extraLines.length > 0
+        ? `${result.message}\n${extraLines.join('\n')}`
+        : result.message
+
       return renderImageFeature({
         feature: '酒狐使用结果',
         imageKey: 'imageUseResult',
         imageEnabled: finalConfig.imageUseResult,
-        textOutput: result.message,
+        textOutput: finalMessage,
         detail: `item=${item.trim()}`,
         render: () => renderUseResultCard(ctx, {
           data: {
             itemId: result.itemId || item.trim(),
             itemName: item.trim(),
-            message: result.message,
+            message: finalMessage,
             effect: result.effect,
           },
         }),
@@ -1565,9 +1698,11 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐天气 =====
   ctx.command('酒狐天气', 'MC风格天气播报')
     .action(async ({ session }) => {
+      const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
       await trackAndNotify(session, 'interact')
       const weatherData = weather.getWeather()
       if (mood && weatherData.moodEffect) mood.onEvent('interact')
+      await affinity.addPoints(session.userId, consumableAffinityBonus)
       const ticketGrant = await grantDailyTickets(session.userId, 'weather')
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`

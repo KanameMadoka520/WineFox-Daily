@@ -18,6 +18,37 @@ async function testCommissionData() {
   assert.strictEqual(data.totalCount, 3, '委托总数应为 3')
 }
 
+async function testCommissionBonusApplied() {
+  const CommissionSystem = require('../lib/commission')
+  const memDir = '/tmp/wf_phase8_commission_bonus'
+  if (fs.existsSync(memDir)) fs.rmSync(memDir, { recursive: true, force: true })
+  fs.mkdirSync(memDir, { recursive: true })
+
+  let added = 0
+  const affinity = {
+    async addTickets(_userId, amount) {
+      added += amount
+      return { newTickets: added }
+    },
+  }
+
+  const commission = new CommissionSystem(memDir, console, affinity, {
+    getCommissionBonus() {
+      return 0.5
+    },
+  })
+
+  commission.data.u1 = {
+    date: '2026-03-14',
+    tasks: [
+      { id: 'gift_1', desc: '送出 1 次礼物', event: 'gift', target: 1, progress: 0, reward: 6, completed: false },
+    ],
+  }
+
+  const result = await commission.recordProgress('u1', 'gift', 1)
+  assert.strictEqual(result.completedTasks[0].actualReward, 9, '委托奖励应叠加 bonus 后发放')
+}
+
 async function testFavoritesDataPagination() {
   const FavoritesSystem = require('../lib/favorites')
   const memDir = '/tmp/wf_phase8_favorites'
@@ -34,6 +65,20 @@ async function testFavoritesDataPagination() {
   assert.strictEqual(data.page, 2, '收藏夹数据应返回正确页码')
   assert.strictEqual(data.totalPages, 2, '收藏夹总页数应正确')
   assert.strictEqual(data.items.length, 1, '第二页应只有一条收藏')
+}
+
+async function testShopTempEffectsPersistence() {
+  const ShopSystem = require('../lib/shop')
+  const memDir = '/tmp/wf_phase8_shop_temp_effects'
+  if (fs.existsSync(memDir)) fs.rmSync(memDir, { recursive: true, force: true })
+  fs.mkdirSync(memDir, { recursive: true })
+
+  const shop = new ShopSystem(memDir, console)
+  await shop.setTempEffect('u1', 'next_affinity_bonus', 2)
+  assert.strictEqual(shop.getTempEffect('u1', 'next_affinity_bonus'), 2, '临时效果应可保存')
+  const taken = await shop.takeTempEffect('u1', 'next_affinity_bonus')
+  assert.strictEqual(taken, 2, '临时效果应可取出')
+  assert.strictEqual(shop.getTempEffect('u1', 'next_affinity_bonus'), undefined, '取出后应被清除')
 }
 
 async function testOmikujiCarriesText() {
@@ -99,7 +144,9 @@ async function testShopItemsExpandedAndIconCovered() {
 async function main() {
   const tests = [
     ['commission data', testCommissionData],
+    ['commission bonus applied', testCommissionBonusApplied],
     ['favorites pagination data', testFavoritesDataPagination],
+    ['shop temp effects persistence', testShopTempEffectsPersistence],
     ['omikuji carries text', testOmikujiCarriesText],
     ['rps carries card fields', testRpsCarriesCardFields],
     ['search with meta and stats', testSearchWithMetaAndStats],
