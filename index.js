@@ -111,7 +111,7 @@ exports.Config = Schema.object({
   enablePassiveKeyword: Schema.boolean().default(true).description('是否开启群聊关键词被动冒泡'),
   passiveCooldown: Schema.number().default(600000).description('群聊被动触发冷却时间（毫秒）'),
   rareDropChance: Schema.number().min(0).max(1).default(0.05).description('稀有语录掉落概率 (0~1)'),
-  dailyAffinityMax: Schema.number().default(20).description('每日好感度获取上限'),
+  dailyAffinityMax: Schema.number().default(35).description('每日好感度获取上限'),
   // === 图片输出 ===
   imageFortune: Schema.boolean().default(true).description('是否为酒狐占卜优先输出图片卡片'),
   imageAffinity: Schema.boolean().default(true).description('是否为酒狐好感优先输出图片卡片'),
