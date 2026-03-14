@@ -421,6 +421,8 @@ exports.apply = (ctx, config = {}) => {
       groups: [
         {
           title: '基础指令',
+          weightBias: 10,
+          dense: true,
           items: [
             ['酒狐', '随机一条语录'],
             ['酒狐 <分类名>', '指定分类语录'],
@@ -436,6 +438,7 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '每日与成长',
+          weightBias: -2,
           items: [
             ['酒狐签到', '每日签到(连续有加成)'],
             ['酒狐签到日历', '查看签到日历'],
@@ -446,6 +449,8 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '趣味玩法',
+          weightBias: 8,
+          dense: true,
           items: [
             ['酒狐心情', '酒狐心情状态'],
             [formatHelpItem('酒狐猜拳 <手势>', '猜拳', freeCommands), '猜拳游戏'],
@@ -460,6 +465,8 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '酿酒系统',
+          weightBias: -10,
+          compact: true,
           items: [
             [formatHelpItem('酒狐酿酒', '酿酒', freeCommands), '查看配方/开始酿酒'],
             ['酒狐酒窖', '查看酿酒进度'],
@@ -468,6 +475,7 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '商店与背包',
+          weightBias: -2,
           items: [
             [formatHelpItem('酒狐商店', '商店', freeCommands), '浏览商品'],
             [formatHelpItem('酒狐购买 <物品>', '购买', freeCommands), '购买物品'],
@@ -478,6 +486,8 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '互动动作',
+          weightBias: 16,
+          dense: true,
           items: [
             ['酒狐成就', '成就徽章'],
             ['酒狐回忆', '回忆录时间线'],
@@ -491,6 +501,8 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '收藏与排行',
+          weightBias: -4,
+          compact: true,
           items: [
             ['酒狐排行', '好感度排行榜'],
             ['酒狐送礼 @某人', '送好感'],
@@ -501,6 +513,8 @@ exports.apply = (ctx, config = {}) => {
         },
         {
           title: '管理员',
+          weightBias: -14,
+          compact: true,
           items: [
             ['酒狐UI [主题名]', '查看或切换图片主题'],
             ['酒狐审核 / 酒狐通过 / 酒狐拒绝 / 酒狐重载', '审核与维护'],
