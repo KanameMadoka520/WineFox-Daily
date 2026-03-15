@@ -1788,7 +1788,7 @@ exports.apply = (ctx, config = {}) => {
       if (mood && weatherData.moodEffect) mood.onEvent('interact')
       await affinity.addPoints(session.userId, consumableAffinityBonus)
       const ticketGrant = await grantDailyTickets(session.userId, 'weather')
-      const rareExtra = await trySpecialRareDrop(session, '天气', ['极光夜', '流星雨', '粉色晨曦'].includes(weatherData.name) ? 0.18 : 0.04)
+      const rareExtra = await trySpecialRareDrop(session, '天气', ['极光', '星空璀璨', '雨后彩虹'].includes(weatherData.name) ? 0.18 : 0.04)
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
         : `\n（今日天气狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
