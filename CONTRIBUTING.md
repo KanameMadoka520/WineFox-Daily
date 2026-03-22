@@ -1,6 +1,6 @@
 # 贡献指南 - 酒狐悄悄话增强版 v2.3
 
-感谢你参与 WineFox-Daily 的维护与扩展。当前项目已经进入 **v2.3 主线**，核心业务、图片卡片和主题切换都已落地，因此贡献时请特别注意“规则一致性”和“图片层一致性”。
+感谢你参与 WineFox-Daily 的维护与扩展。当前项目已经进入 **v2.3 主线**，核心业务、图片卡片、主题切换、扩展语料库和循环季节系统都已落地，因此贡献时请特别注意“规则一致性”和“图片层一致性”。
 
 ---
 
@@ -10,6 +10,7 @@
 
 - 扩充 `data/` 中的语录、故事、天气、问答、商店文案
 - 继续补齐图片卡片或继续优化现有卡片比例
+- 围绕季节系统继续补世界状态联动、卡片状态头和轻量运营玩法
 - 优化宿主联调体验和图片性能
 - 修复业务逻辑与文案不一致的问题
 
@@ -18,6 +19,7 @@
 - 擅自改动双货币规则
 - 擅自改动 10 级好感曲线
 - 擅自修改委托 event 名、装备 bonus 类型、图片主题 id
+- 擅自修改季节 id、主题 id、天气 type 这类会影响持久化和图片状态块的稳定标识
 
 ---
 
@@ -42,11 +44,13 @@
 | `data/responses.js` | 统一台词库 | 含升级、互动、签到、结果卡文案等 |
 | `data/mood_decorators.js` | 心情修饰词 | - |
 | `data/weather_data.js` | 天气数据 | - |
+| `data/season_data.js` | 季节定义 / 季节天气偏向 | 季节 `id` 与别名不要随意改 |
 | `data/quiz_data.js` | 问答题库 | 注意答案索引正确 |
 | `data/brewing_recipes.js` | 酿酒配方 | 文案应与狐狐券语义一致 |
 | `data/shop_items.js` | 商店物品 | 改 bonus / effect / 图标含义时必须同步检查逻辑支持 |
 | `data/commission_data.js` | 委托模板池 | `event` 名必须与代码中的事件上报一致 |
 | `data/card_themes.js` | 图片主题定义 | 主题 id、name、alias 要保持稳定 |
+| `data/quotes_extra*.js` | 扩展语料包 | 适合继续分专题扩写，不建议反复把内容塞回 `quotes.txt` |
 
 ### 语录编写规范
 
@@ -114,6 +118,29 @@ WineFox-Daily/
 4. 在 `exports.Config` 和 `runtime_config.js` 中补对应 `imageXxx` 开关
 5. 若需要，补测试到 `test/phase8.test.js` 或新测试文件
 
+### 季节系统约定
+
+当前季节系统已经是主线能力的一部分，不再只是单独的“展示型指令”。
+
+- 季节定义：`data/season_data.js`
+- 状态存档：`memory/season-cycle.json`
+- 核心逻辑：`lib/season.js`
+- 影响范围：
+  - `酒狐天气`
+  - `酒狐`
+  - `每日酒狐`
+  - `酒狐故事`
+  - `酒狐占卜`
+  - `酒狐心情`
+  - `酒狐帮助` / `酒狐季节` / `酒狐天气` 等卡片状态头
+
+如果你继续扩季节系统，请至少同步检查：
+
+1. 是否需要补 `README.md`
+2. 是否需要补 `HANDOFF.md`
+3. 是否需要补对应测试
+4. 是否会影响 `酒狐季节状态` / `酒狐季节设置` / `酒狐季节周期` / `酒狐季节恢复自动`
+
 ### 商店与图标约定
 
 商店系统当前不仅有文案和价格，还有统一的 SVG 图标和效果接线：
@@ -158,6 +185,10 @@ WineFox-Daily/
 - `test/phase7.test.js`
 - `test/phase8.test.js`
 - `test/ui-theme.test.js`
+- `test/season-cycle.test.js`
+- `test/weather-season.test.js`
+- `test/seasonal-content.test.js`
+- `test/season-fortune-mood.test.js`
 
 建议每次改动后至少验证：
 
@@ -169,11 +200,17 @@ node test/phase6.test.js
 node test/phase7.test.js
 node test/phase8.test.js
 node test/ui-theme.test.js
+node test/season-cycle.test.js
+node test/weather-season.test.js
+node test/seasonal-content.test.js
+node test/season-fortune-mood.test.js
 ```
 
 如果你改了图片相关逻辑，还应在真实 Koishi 宿主里额外测试：
 
 - `酒狐帮助`
+- `酒狐季节`
+- `酒狐天气`
 - `酒狐商店`
 - `酒狐故事`
 - `酒狐委托`

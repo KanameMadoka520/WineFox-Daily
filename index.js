@@ -9,6 +9,7 @@
  * - 酒狐问答
  * - 酒狐回忆
  * - 酒狐故事目录 / 酒狐故事 <分类>
+ * - 酒狐季节 / 酒狐天气
  * - 酒狐取消收藏
  * - 酒狐喂酒 / 酒狐挠耳朵 / 酒狐牵手
  * - 互动冷却 / 成就奖励 / 游戏会话超时
@@ -18,10 +19,11 @@ const path = require('path')
 const fs = require('fs')
 const { Schema } = require('koishi')
 const responseData = require('./data/responses')
+const { listSeasons, resolveSeason } = require('./data/season_data')
 
 // lib 模块
 const QuotesLoader = require('./lib/quotes-loader')
-const { pickByTime } = require('./lib/time-aware')
+const { pickByTime, getTimePeriodLabel } = require('./lib/time-aware')
 const AffinitySystem = require('./lib/affinity')
 const DailyQuote = require('./lib/daily')
 const FestivalSystem = require('./lib/festival')
@@ -59,6 +61,7 @@ const {
   renderStoryCards,
   renderStoryCatalogCard,
   renderWeatherCard,
+  renderSeasonCard,
   renderMoodCard,
   renderCheckinResultCard,
   renderBuyResultCard,
@@ -76,6 +79,7 @@ const GamesSystem = require('./lib/games')
 const StorySystem = require('./lib/story')
 const AchievementSystem = require('./lib/achievements')
 const WeatherSystem = require('./lib/weather')
+const SeasonSystem = require('./lib/season')
 const FavoritesSystem = require('./lib/favorites')
 const { registerInteractions, clearUserCooldowns } = require('./lib/interactions')
 
@@ -141,11 +145,14 @@ exports.Config = Schema.object({
   imageStory: Schema.boolean().default(true).description('是否为酒狐故事优先输出图片卡片'),
   imageStoryCatalog: Schema.boolean().default(true).description('是否为酒狐故事目录优先输出图片卡片'),
   imageWeather: Schema.boolean().default(true).description('是否为酒狐天气优先输出图片卡片'),
+  imageSeason: Schema.boolean().default(true).description('是否为酒狐季节优先输出图片卡片'),
   imageMood: Schema.boolean().default(true).description('是否为酒狐心情优先输出图片卡片'),
   imageCellar: Schema.boolean().default(true).description('是否为酒狐酒窖优先输出图片卡片'),
   imageBrewResult: Schema.boolean().default(true).description('是否为酒狐酿酒成功优先输出结果卡片'),
   imageOpenBottleResult: Schema.boolean().default(true).description('是否为酒狐开瓶成功优先输出结果卡片'),
   imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
+  seasonCycleHours: Schema.number().min(1).max(168).default(24).description('季节轮换周期（小时），按循环制切换，不按现实月份。'),
+  seasonQuoteChance: Schema.number().min(0).max(1).default(0.35).description('主语录触发当前季节偏向语录的概率 (0~1)'),
   // === 心情 ===
   enableMoodDecorate: Schema.boolean().default(true).description('是否启用心情修饰语录'),
   moodDecorateChance: Schema.number().min(0).max(1).default(0.4).description('心情修饰词出现概率 (0~1)'),
@@ -249,6 +256,11 @@ exports.apply = (ctx, config = {}) => {
   const dataDir = path.join(__dirname, 'data')
   const memoryDir = path.join(__dirname, 'memory')
   const quotesPath = path.join(dataDir, 'quotes.txt')
+  const quotesExtraPath = path.join(dataDir, 'quotes_extra.js')
+  const quotesExtraLovePath = path.join(dataDir, 'quotes_extra_love.js')
+  const quotesExtraFunPath = path.join(dataDir, 'quotes_extra_fun.js')
+  const quotesExtraDarkPath = path.join(dataDir, 'quotes_extra_dark.js')
+  const quotesExtraThemedPath = path.join(dataDir, 'quotes_extra_themed.js')
   const runtimeConfigJsPath = path.join(__dirname, 'runtime_config.js')
   const runtimeConfigJsonPath = path.join(__dirname, 'runtime_config.json')
 
@@ -289,7 +301,7 @@ exports.apply = (ctx, config = {}) => {
   if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true })
 
   // ===== 初始化各子系统 =====
-  const quotesLoader = new QuotesLoader(quotesPath, logger)
+  const quotesLoader = new QuotesLoader([quotesPath, quotesExtraPath, quotesExtraLovePath, quotesExtraFunPath, quotesExtraDarkPath, quotesExtraThemedPath], logger)
   const affinity = new AffinitySystem(memoryDir, logger, { dailyAffinityMax: finalConfig.dailyAffinityMax })
   const daily = new DailyQuote(memoryDir, logger)
   const festival = new FestivalSystem()
@@ -300,6 +312,7 @@ exports.apply = (ctx, config = {}) => {
   const story = new StorySystem(dataDir, memoryDir, logger)
   const achievements = new AchievementSystem(memoryDir, logger)
   const weather = new WeatherSystem()
+  const season = new SeasonSystem(memoryDir, logger, { cycleHours: finalConfig.seasonCycleHours })
   const favorites = new FavoritesSystem(memoryDir, logger, { maxFavorites: finalConfig.maxFavorites, favoritesPerPage: finalConfig.favoritesPerPage })
 
   // v2.2 子系统
@@ -503,13 +516,31 @@ exports.apply = (ctx, config = {}) => {
     return `${label}${suffix}`
   }
 
+  function getSeasonModeFooter() {
+    const seasonData = season.getSeason()
+    const modeLabel = seasonData.isManualOverride ? '手动干预中' : '自动轮换中'
+    return `当前季节模式：${seasonData.name} · ${modeLabel}`
+  }
+
   function getHelpData() {
     const today = require('./lib/utils').getTodayKey()
     const freeCommands = dailyFree.getDailyFreeCommands(today)
     const freeLabel = freeCommands.map(cmd => `酒狐${cmd}`).join(' / ')
+    const seasonData = season.getSeason()
+    const weatherData = weather.getWeather({ season: seasonData })
+    const modeLabel = seasonData.isManualOverride ? '手动干预中' : '自动轮换中'
 
     return {
       title: '酒狐悄悄话 v2.3 - 指令列表',
+      status: {
+        seasonId: seasonData.id,
+        season: seasonData.name,
+        weatherType: weatherData.type,
+        weather: weatherData.name,
+        period: getTimePeriodLabel(),
+        mode: modeLabel,
+        nextChange: seasonData.remainingLabel,
+      },
       groups: [
         {
           title: '基础指令',
@@ -551,6 +582,7 @@ exports.apply = (ctx, config = {}) => {
             [formatHelpItem('酒狐故事', '故事', freeCommands), '随机冒险日记'],
             [formatHelpItem('酒狐故事 <分类>', '故事', freeCommands), '指定分类故事'],
             ['酒狐故事目录', '故事分类列表'],
+            ['酒狐季节', '循环季节播报'],
             ['酒狐天气', 'MC天气播报'],
             [formatHelpItem('酒狐问答', '问答', freeCommands), 'MC知识问答'],
           ],
@@ -609,11 +641,16 @@ exports.apply = (ctx, config = {}) => {
           compact: true,
           items: [
             ['酒狐UI [主题名]', '查看或切换图片主题'],
+            ['酒狐季节状态', '查看当前季节干预状态'],
+            ['酒狐季节设置 <季节>', '手动切换循环季节'],
+            ['酒狐季节周期 <小时>', '手动修改季节轮换速度'],
+            ['酒狐季节恢复自动', '恢复默认季节轮换速度'],
             ['酒狐审核 / 酒狐通过 / 酒狐拒绝 / 酒狐重载', '审核与维护'],
           ],
         },
       ],
       footer: `今日免费体验: ${freeLabel} ｜ 戳一戳酒狐也会回复哦~`,
+      footerText: getSeasonModeFooter(),
     }
   }
 
@@ -690,6 +727,7 @@ exports.apply = (ctx, config = {}) => {
 
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
+      const seasonData = season.getSeason()
 
       if (affinityResult.levelUp) {
         const levelUpLine = affinity.getLevelUpLine(affinityResult.newLevel.level)
@@ -702,7 +740,7 @@ exports.apply = (ctx, config = {}) => {
           const catQuotes = quotesLoader.getCategory(catName)
           if (catQuotes && catQuotes.length > 0) {
             const { picked } = require('./lib/utils').randomPickAvoidRecent(catQuotes, [])
-            const decorated = mood.decorateQuote(picked)
+            const decorated = mood.decorateQuote(picked, { season: seasonData })
             favorites.setLastReceived(userId, picked)
             return resOutput + decorated
           }
@@ -717,6 +755,8 @@ exports.apply = (ctx, config = {}) => {
       }
 
       let quote = pickByTime(quotesLoader, { timeAwareChance: finalConfig.timeAwareChance || 0.6 })
+      const seasonalQuote = season.pickSeasonalQuote(quotesLoader, { chance: finalConfig.seasonQuoteChance, season: seasonData })
+      if (seasonalQuote) quote = seasonalQuote
 
       const guaranteedRare = await consumeGuaranteedRare(userId)
       const rareChance = (finalConfig.rareDropChance ?? 0.05) + shop.getEquippedBonus(userId, 'rare_chance_bonus')
@@ -733,7 +773,7 @@ exports.apply = (ctx, config = {}) => {
       }
 
       const finalQuote = quote || '主人，我的脑袋突然一片空白...'
-      const decorated = mood.decorateQuote(finalQuote)
+      const decorated = mood.decorateQuote(finalQuote, { season: seasonData })
 
       // 装备效果
       const equipEffect = shop.getEquippedEffect(userId)
@@ -749,6 +789,8 @@ exports.apply = (ctx, config = {}) => {
   ctx.command('每日酒狐', '获取今日专属酒狐语录')
     .action(async ({ session }) => {
       if (quotesLoader.count === 0) return '主人，语录本不见了...'
+      const seasonData = season.getSeason()
+      const seasonalQuotePool = season.getSeasonalQuotePool(quotesLoader, { season: seasonData })
       const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
       const affinityBonus = shop.getEquippedBonus(session.userId, 'affinity_bonus') + shop.getEquippedBonus(session.userId, 'all_affinity_bonus')
       const dailyCapBonus = shop.getEquippedBonus(session.userId, 'daily_cap_bonus')
@@ -757,7 +799,10 @@ exports.apply = (ctx, config = {}) => {
       const ticketGrant = await grantDailyTickets(session.userId, 'daily_quote')
       await trackAndNotify(session, 'interact')
       await trackCommission(session, 'interact')
-      const quote = await daily.getTodayQuote(quotesLoader.all)
+      const quote = await daily.getTodayQuote(quotesLoader.all, {
+        contextKey: `season:${seasonData.id}`,
+        preferredQuotes: seasonalQuotePool,
+      })
       let resOutput = ''
       if (affinityResult.decayed) resOutput += affinityResult.decayMessage + '\n\n'
       favorites.setLastReceived(session.userId, quote)
@@ -775,10 +820,14 @@ exports.apply = (ctx, config = {}) => {
         textOutput,
         render: () => renderDailyQuoteCard(ctx, {
           data: {
+            seasonId: seasonData.id,
+            mode: seasonData.isManualOverride ? '手动干预中' : '自动轮换中',
             quote,
+            season: seasonData.name,
             ticketReward: ticketGrant.granted,
             progressLine: progressLine || '今日好感已达上限',
             dateLabel: require('./lib/utils').getTodayKey(),
+            footerText: getSeasonModeFooter(),
           },
         }),
         fallbackMessage: '酒狐悄悄话: 每日语录卡片生成失败了，请稍后再试一次...',
@@ -909,7 +958,8 @@ exports.apply = (ctx, config = {}) => {
       await trackAndNotify(session, 'fortune')
       await trackCommission(session, 'fortune')
       const ticketGrant = await grantDailyTickets(session.userId, 'fortune')
-      const fortuneData = fortune.getTodayFortuneData(session.userId)
+      const seasonData = season.getSeason()
+      const fortuneData = fortune.getTodayFortuneData(session.userId, { season: seasonData })
       const rareExtra = await trySpecialRareDrop(session, '占卜', fortuneData.luck >= 85 ? 0.18 : 0.05)
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
@@ -925,8 +975,11 @@ exports.apply = (ctx, config = {}) => {
           userName: session.username || session.author?.name || session.userId,
           data: {
             ...fortuneData,
+            seasonId: seasonData.id,
+            mode: seasonData.isManualOverride ? '手动干预中' : '自动轮换中',
             ticketReward: ticketGrant.granted,
             commentText: `${fortuneData.commentText}${rareExtra ? '\n\n今天似乎还翻出了一张特别稀有的小签。' : ''}`,
+            footerText: getSeasonModeFooter(),
           },
         }),
         fallbackMessage: '酒狐悄悄话: 占卜卡片生成失败了，请稍后再试一次...',
@@ -936,8 +989,9 @@ exports.apply = (ctx, config = {}) => {
   // ===== 酒狐心情 =====
   ctx.command('酒狐心情', '查看酒狐当前心情')
     .action(async () => {
-      const moodInfo = mood.getMood()
-      const textOutput = mood.getStatusText()
+      const seasonData = season.getSeason()
+      const moodInfo = mood.getMood({ season: seasonData })
+      const textOutput = mood.getStatusText({ season: seasonData })
 
       return renderImageFeature({
         feature: '酒狐心情',
@@ -947,9 +1001,13 @@ exports.apply = (ctx, config = {}) => {
         render: () => renderMoodCard(ctx, {
           data: {
             title: '酒狐心情',
+            seasonId: seasonData.id,
             mood: moodInfo.name,
             emoji: moodInfo.emoji,
+            mode: seasonData.isManualOverride ? '手动干预中' : '自动轮换中',
+            season: seasonData.name,
             body: textOutput,
+            footerText: getSeasonModeFooter(),
           },
         }),
         fallbackMessage: '酒狐悄悄话: 心情卡片生成失败了，请稍后再试一次...',
@@ -1153,7 +1211,8 @@ exports.apply = (ctx, config = {}) => {
         })
       }
 
-      const storyData = await story.getRandomStoryData()
+      const seasonData = season.getSeason()
+      const storyData = await story.getRandomStoryData({ season, seasonData, preferSeasonChance: 0.6 })
       const progressLine = (affinityResult.actualAdded || 0) > 0 ? `\n${affinity.formatProgressLine(session.userId, affinityResult.actualAdded)}` : ''
       const textOutput = `${storyData.text}${ticketLine}${progressLine}${buildAffinityCapNote(affinityResult)}`
       return renderImageFeature({
@@ -1784,7 +1843,8 @@ exports.apply = (ctx, config = {}) => {
     .action(async ({ session }) => {
       const consumableAffinityBonus = await consumeInteractionBonus(session.userId)
       await trackAndNotify(session, 'interact')
-      const weatherData = weather.getWeather()
+      const seasonData = season.getSeason()
+      const weatherData = weather.getWeather({ season: seasonData })
       if (mood && weatherData.moodEffect) mood.onEvent('interact')
       await affinity.addPoints(session.userId, consumableAffinityBonus)
       const ticketGrant = await grantDailyTickets(session.userId, 'weather')
@@ -1792,7 +1852,7 @@ exports.apply = (ctx, config = {}) => {
       const ticketLine = ticketGrant.granted > 0
         ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
         : `\n（今日天气狐狐券已领满，当前 ${ticketGrant.newTickets} 张）`
-      const textOutput = weather.getReport() + ticketLine + rareExtra
+      const textOutput = `${weather.getReport({ season: seasonData })}\n季节: ${seasonData.name}\n下次更替: ${seasonData.remainingLabel}\n${ticketLine}${rareExtra}`
       const periodMap = {
         latenight: '深夜',
         dawn: '清晨',
@@ -1812,8 +1872,13 @@ exports.apply = (ctx, config = {}) => {
         render: () => renderWeatherCard(ctx, {
           data: {
             title: '酒狐天气',
+            weatherType: weatherData.type,
             status: weatherData.name,
             period: periodMap[periodKey] || '未知',
+            seasonId: seasonData.id,
+            season: seasonData.name,
+            mode: seasonData.isManualOverride ? '手动干预中' : '自动轮换中',
+            nextChange: seasonData.remainingLabel,
             body: weatherData.description,
             ticketReward: ticketGrant.granted,
             foxComment: `${weatherData.foxComment}${rareExtra ? '\n今天的天空像是藏了一句格外珍贵的悄悄话。' : ''}`,
@@ -1821,6 +1886,151 @@ exports.apply = (ctx, config = {}) => {
         }),
         fallbackMessage: '酒狐悄悄话: 天气卡片生成失败了，请稍后再试一次...',
       })
+    })
+
+  // ===== 酒狐季节 =====
+  ctx.command('酒狐季节', '查看当前循环季节')
+    .action(() => {
+      const seasonData = season.getSeason()
+      const textOutput = season.getReport(seasonData)
+
+      return renderImageFeature({
+        feature: '酒狐季节',
+        imageKey: 'imageSeason',
+        imageEnabled: finalConfig.imageSeason,
+        textOutput,
+        render: () => renderSeasonCard(ctx, {
+          data: {
+            title: '酒狐季节',
+            seasonId: seasonData.id,
+            season: seasonData.name,
+            cycleHours: seasonData.cycleHours,
+            mode: seasonData.isManualOverride ? '手动干预中' : '自动轮换中',
+            nextChange: seasonData.remainingLabel,
+            description: seasonData.description,
+            recommendations: seasonData.recommendations,
+            foxComment: seasonData.foxComment,
+            footerText: getSeasonModeFooter(),
+          },
+        }),
+        fallbackMessage: '酒狐悄悄话: 季节卡片生成失败了，请稍后再试一次...',
+      })
+    })
+
+  ctx.command('酒狐季节设置 [seasonName:text]', '手动设置当前循环季节', { authority: 3 })
+    .action((_, seasonName) => {
+      const currentSeason = season.getSeason()
+      const seasons = listSeasons()
+
+      if (!seasonName || !seasonName.trim()) {
+        return [
+          '== 酒狐季节设置 ==',
+          '',
+          `当前季节: ${currentSeason.name}`,
+          `下次更替: ${currentSeason.remainingLabel}`,
+          '',
+          '可设置季节:',
+          ...seasons.map(item => `- ${item.name} (${item.id})`),
+          '',
+          '使用「酒狐季节设置 春季」进行切换',
+        ].join('\n')
+      }
+
+      const resolved = resolveSeason(seasonName)
+      if (!resolved) {
+        return [
+          `酒狐悄悄话: 没找到「${seasonName.trim()}」这个季节哦。`,
+          '',
+          '可设置季节:',
+          ...seasons.map(item => `- ${item.name}`),
+        ].join('\n')
+      }
+
+      const result = season.setSeason(resolved.id)
+      if (!result.success) {
+        return '酒狐悄悄话: 季节切换失败了，请稍后再试一次...'
+      }
+
+      logger.info(`[fox] 循环季节已切换为 ${result.season.name} (${result.season.id})`)
+      return [
+        `酒狐悄悄话: 已切换到「${result.season.name}」！`,
+        result.season.description,
+        `下次更替: ${result.season.remainingLabel}`,
+      ].join('\n')
+    })
+
+  ctx.command('酒狐季节周期 [hours:number]', '手动设置循环季节周期', { authority: 3 })
+    .action((_, hours) => {
+      const currentSeason = season.getSeason()
+
+      if (!hours || hours < 1) {
+        return [
+          '== 酒狐季节周期 ==',
+          '',
+          `当前季节: ${currentSeason.name}`,
+          `当前周期: 每 ${currentSeason.cycleHours} 小时轮换一次`,
+          `下次更替: ${currentSeason.remainingLabel}`,
+          '',
+          '使用「酒狐季节周期 12」可以改成每 12 小时轮换一次',
+        ].join('\n')
+      }
+
+      const result = season.setCycleHours(hours)
+      if (!result.success) {
+        return '酒狐悄悄话: 季节周期设置失败了，请输入大于等于 1 的小时数。'
+      }
+
+      logger.info(`[fox] 循环季节周期已调整为 ${result.season.cycleHours} 小时`)
+      return [
+        `酒狐悄悄话: 循环季节周期已改为每 ${result.season.cycleHours} 小时切换一次！`,
+        `当前季节: ${result.season.name}`,
+        `下次更替: ${result.season.remainingLabel}`,
+      ].join('\n')
+    })
+
+  ctx.command('酒狐季节状态', '查看循环季节当前状态', { authority: 3 })
+    .action(() => {
+      const currentSeason = season.getSeason()
+      const modeLabel = currentSeason.isManualOverride ? '手动干预中' : '自动轮换中'
+      return [
+        '== 酒狐季节状态 ==',
+        '',
+        `当前季节: ${currentSeason.name}`,
+        `当前模式: ${modeLabel}`,
+        `手动指定季节: ${currentSeason.isManualSeason ? '是' : '否'}`,
+        `手动调整周期: ${currentSeason.isManualCycle ? '是' : '否'}`,
+        `当前周期: 每 ${currentSeason.cycleHours} 小时切换一次`,
+        `默认周期: 每 ${currentSeason.defaultCycleHours} 小时切换一次`,
+        `下次更替: ${currentSeason.remainingLabel}`,
+      ].join('\n')
+    })
+
+  ctx.command('酒狐季节恢复自动', '恢复默认循环季节周期', { authority: 3 })
+    .action(() => {
+      const defaultCycleHours = Math.max(1, Number(finalConfig.seasonCycleHours) || 24)
+      const currentSeason = season.getSeason()
+
+      if (!currentSeason.isManualOverride && currentSeason.cycleHours === defaultCycleHours) {
+        return [
+          '酒狐悄悄话: 当前季节轮换已经是默认自动节奏了。',
+          `当前季节: ${currentSeason.name}`,
+          `默认周期: 每 ${defaultCycleHours} 小时切换一次`,
+          `下次更替: ${currentSeason.remainingLabel}`,
+        ].join('\n')
+      }
+
+      const result = season.restoreAuto()
+      if (!result.success) {
+        return '酒狐悄悄话: 恢复默认季节节奏失败了，请稍后再试一次...'
+      }
+
+      logger.info(`[fox] 循环季节周期已恢复为默认值 ${defaultCycleHours} 小时`)
+      return [
+        '酒狐悄悄话: 已恢复默认季节轮换节奏！',
+        `当前季节: ${result.season.name}`,
+        `默认周期: 每 ${result.season.cycleHours} 小时切换一次`,
+        `下次更替: ${result.season.remainingLabel}`,
+      ].join('\n')
     })
 
   // ===== 酒狐委托 =====

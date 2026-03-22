@@ -7,9 +7,11 @@ async function testThemeResolution() {
   assert.ok(resolveCardTheme('奶油纸张'), '应支持按中文主题名解析')
   assert.ok(resolveCardTheme('sky-glass'), '应支持按主题 id 解析')
   assert.ok(resolveCardTheme('咖啡馆'), '应支持按别名解析')
+  assert.ok(resolveCardTheme('wedog'), '应支持按 WeDog 主题别名解析')
   assert.strictEqual(resolveCardTheme('不存在的主题'), null, '不存在的主题应返回 null')
   assert.ok(getCardThemeById('cream-paper'), '应能按 id 获取主题')
-  assert.strictEqual(listCardThemes().length >= 3, true, '应至少提供 3 个主题')
+  assert.ok(getCardThemeById('wedog-letter'), '应能获取新增的 WeDog 灵感主题')
+  assert.strictEqual(listCardThemes().length >= 4, true, '应至少提供 4 个主题')
 }
 
 async function testThemePersistence() {
@@ -21,11 +23,11 @@ async function testThemePersistence() {
   const uiTheme = new UIThemeSystem(memDir, console)
   assert.strictEqual(uiTheme.getThemeId(), 'cream-paper', '默认主题应为 cream-paper')
 
-  const result = await uiTheme.setTheme('sky-glass')
+  const result = await uiTheme.setTheme('wedog-letter')
   assert.strictEqual(result.success, true, '切换已存在主题应成功')
 
   const uiThemeReloaded = new UIThemeSystem(memDir, console)
-  assert.strictEqual(uiThemeReloaded.getThemeId(), 'sky-glass', '重载后应保留已切换主题')
+  assert.strictEqual(uiThemeReloaded.getThemeId(), 'wedog-letter', '重载后应保留已切换主题')
 }
 
 async function main() {
