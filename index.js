@@ -98,6 +98,15 @@ const TicketRewardLedger = require('./lib/ticket-reward-ledger')
 const { createAsyncLimiter } = require('./lib/async-limiter')
 const PrefsSystem = require('./lib/prefs')
 const RenderCache = require('./lib/render-cache')
+const RenderMetricsBuffer = require('./lib/render-metrics')
+const {
+  DEFAULT_PLAYER_MEMORY_FILES,
+  getDefaultBackupRootDir,
+  createPlayerBackup,
+  listPlayerBackups,
+  resolvePlayerBackupDir,
+  restorePlayerBackup,
+} = require('./lib/player-backup')
 
 exports.name = 'WineFox-Daily'
 exports.inject = {
@@ -105,7 +114,7 @@ exports.inject = {
 }
 
 exports.usage = `
-## 酒狐悄悄话增强版 v2.3
+## 酒狐悄悄话增强版 v2.3.1
 
 一只可爱的酒狐女仆，随时随地为主人送上暖心悄悄话。
 
@@ -122,6 +131,8 @@ exports.Config = Schema.object({
   rareDropChance: Schema.number().min(0).max(1).default(0.05).description('稀有语录掉落概率 (0~1)'),
   dailyAffinityMax: Schema.number().default(50).description('每日好感度获取上限'),
   ioDebounceMs: Schema.number().min(0).default(0).description('高频存档写入防抖（毫秒，0=关闭；目前主要用于历史记录类文件）'),
+  opsAdminIds: Schema.array(String).default([]).description('指定可执行敏感运维指令的QQ/用户ID列表（例如存档备份/恢复、查询他人账本）'),
+  renderMetricsMaxEntries: Schema.number().min(50).default(200).description('渲染统计最多保留多少条记录（仅内存）'),
   // === 图片输出 ===
   imageFortune: Schema.boolean().default(true).description('是否为酒狐占卜优先输出图片卡片'),
   imageAffinity: Schema.boolean().default(true).description('是否为酒狐好感优先输出图片卡片'),
@@ -195,6 +206,7 @@ exports.apply = (ctx, config = {}) => {
   let imageRenderLimiter = null
   let renderCache = null
   let prefs = null
+  let renderMetrics = null
   let pluginVersion = 'unknown'
   try {
     const pkg = require('./package.json')
@@ -227,11 +239,26 @@ exports.apply = (ctx, config = {}) => {
       cacheTtlMs = 0,
     } = options
 
+    const startedAt = Date.now()
     const puppeteerAvailable = hasPuppeteer(ctx)
     const globalTheme = getActiveCardThemeInfo()
     const resolvedThemeId = prefs ? prefs.resolveThemeId(session, globalTheme.id) : globalTheme.id
     const forceText = prefs ? prefs.resolveForceText(session) : false
     const effectiveImageEnabled = !!imageEnabled && !forceText
+    const queueEnabled = !!imageRenderLimiter?.getStatus?.().enabled
+
+    const recordMetric = (metric) => {
+      if (!renderMetrics) return
+      renderMetrics.push({
+        ts: Date.now(),
+        feature,
+        imageKey,
+        themeId: resolvedThemeId,
+        queueEnabled,
+        detail,
+        ...metric,
+      })
+    }
 
     const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: resolvedThemeId, forceText }
     for (const check of extraChecks) {
@@ -243,17 +270,20 @@ exports.apply = (ctx, config = {}) => {
     if (!effectiveImageEnabled) {
       const reason = forceText ? 'force_text' : `${imageKey}_disabled`
       logger.info(`[fox] ${feature}回退文字输出 reason=${reason}${formatLogDetail(detail)}`)
+      recordMetric({ ok: true, reason, cacheHit: false, waitMs: 0, renderMs: 0, totalMs: Date.now() - startedAt })
       return textOutput
     }
 
     if (!puppeteerAvailable) {
       logger.info(`[fox] ${feature}回退文字输出 reason=puppeteer_unavailable${formatLogDetail(detail)}`)
+      recordMetric({ ok: true, reason: 'puppeteer_unavailable', cacheHit: false, waitMs: 0, renderMs: 0, totalMs: Date.now() - startedAt })
       return textOutput
     }
 
     const failedCheck = extraChecks.find(check => !check.ok)
     if (failedCheck) {
       logger.info(`[fox] ${feature}回退文字输出 reason=${failedCheck.reason}${formatLogDetail(detail)}`)
+      recordMetric({ ok: true, reason: failedCheck.reason || 'extra_check_failed', cacheHit: false, waitMs: 0, renderMs: 0, totalMs: Date.now() - startedAt })
       return textOutput
     }
 
@@ -267,23 +297,49 @@ exports.apply = (ctx, config = {}) => {
         const hit = renderCache.get(finalCacheKey)
         if (hit.hit) {
           logger.info(`[fox] ${feature}命中图片缓存${formatLogDetail(detail)}`)
+          recordMetric({ ok: true, reason: 'cache_hit', cacheHit: true, waitMs: 0, renderMs: 0, totalMs: Date.now() - startedAt })
           return hit.value
         }
       }
 
       logger.info(`[fox] ${feature}开始图片渲染${formatLogDetail(detail)}`)
       const renderTask = () => withCardTheme(resolvedThemeId, render)
-      const rendered = imageRenderLimiter
-        ? await imageRenderLimiter.run(renderTask, finalConfig.imageRenderQueueTimeout)
-        : await renderTask()
+      let rendered = ''
+      let waitMs = 0
+      let renderMs = 0
+      let totalMs = 0
+
+      if (imageRenderLimiter?.runWithMetrics) {
+        const result = await imageRenderLimiter.runWithMetrics(renderTask, finalConfig.imageRenderQueueTimeout)
+        rendered = result.value
+        waitMs = result.metrics?.waitMs || 0
+        renderMs = result.metrics?.runMs || 0
+        totalMs = result.metrics?.totalMs || (Date.now() - startedAt)
+      } else {
+        const runStart = Date.now()
+        rendered = await renderTask()
+        renderMs = Date.now() - runStart
+        totalMs = Date.now() - startedAt
+      }
+
       if (finalCacheKey) {
         const ttl = cacheTtlMs || finalConfig.imageCacheDefaultTtlMs
         renderCache.set(finalCacheKey, rendered, ttl)
       }
       logger.info(`[fox] ${feature}图片渲染成功${formatLogDetail(detail)}`)
+      recordMetric({ ok: true, reason: 'rendered', cacheHit: false, waitMs, renderMs, totalMs })
       return rendered
     } catch (err) {
       const reason = err?.code === 'QUEUE_TIMEOUT' ? 'queue_timeout' : 'render_failed'
+      const metrics = err?.metrics || {}
+      recordMetric({
+        ok: false,
+        reason,
+        cacheHit: false,
+        waitMs: Number.isFinite(metrics.waitMs) ? metrics.waitMs : 0,
+        renderMs: Number.isFinite(metrics.runMs) ? metrics.runMs : 0,
+        totalMs: Number.isFinite(metrics.totalMs) ? metrics.totalMs : (Date.now() - startedAt),
+      })
       logger.warn(`[fox] ${feature}图片渲染失败 reason=${reason}`, err)
       logger.info(`[fox] ${feature}回退文字输出 reason=${reason}${formatLogDetail(detail)}`)
       if (finalConfig.imageFallbackToText) return textOutput
@@ -339,8 +395,29 @@ exports.apply = (ctx, config = {}) => {
     maxEntries: finalConfig.imageCacheMaxEntries,
     defaultTtlMs: finalConfig.imageCacheDefaultTtlMs,
   })
+  renderMetrics = new RenderMetricsBuffer({ maxEntries: finalConfig.renderMetricsMaxEntries })
+  const opsAdminSet = new Set(
+    (Array.isArray(finalConfig.opsAdminIds) ? finalConfig.opsAdminIds : [])
+      .map(item => String(item || '').trim())
+      .filter(Boolean)
+  )
 
   logger.info(`[fox] Puppeteer 服务可用: ${hasPuppeteer(ctx)}`)
+
+  function isOpsAdmin(session) {
+    if (!opsAdminSet.size) return false
+    const userId = String(session?.userId || '').trim()
+    if (!userId) return false
+    return opsAdminSet.has(userId)
+  }
+
+  function requireOpsAdmin(session, actionLabel = '该操作') {
+    if (isOpsAdmin(session)) return null
+    if (!opsAdminSet.size) {
+      return `酒狐悄悄话: ${actionLabel} 需要先在配置里设置 opsAdminIds（指定允许执行敏感指令的 QQ/用户ID）。`
+    }
+    return `酒狐悄悄话: ${actionLabel} 仅限 opsAdminIds 指定的管理员执行。`
+  }
 
   function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0B'
@@ -969,6 +1046,84 @@ exports.apply = (ctx, config = {}) => {
         }),
         fallbackMessage: '酒狐悄悄话: 好感卡片生成失败了，请稍后再试一次...',
       })
+    })
+
+  // ===== 酒狐账本 =====
+  ctx.command('酒狐账本 [target:text]', '查看今日收益与上限（解释为什么没奖励）')
+    .action(({ session }, target) => {
+      const today = require('./lib/utils').getTodayKey()
+
+      const extractUserId = (input) => {
+        let text = String(input || '').trim()
+        if (!text) return ''
+        const atMatch = text.match(/<at id="([^"]+)"/)
+        if (atMatch) return atMatch[1]
+        const cqMatch = text.match(/\[CQ:at,qq=(\d+)\]/)
+        if (cqMatch) return cqMatch[1]
+        return text
+      }
+
+      let userId = session.userId
+      let modeLabel = '本人'
+
+      if (target && String(target).trim()) {
+        const deny = requireOpsAdmin(session, '查询他人账本')
+        if (deny) return deny
+        userId = extractUserId(target)
+        if (!userId) return '酒狐悄悄话: 请输入要查询的对象，例如：酒狐账本 @某人'
+        modeLabel = '管理员查询'
+      }
+
+      const status = affinity.getStatus(userId)
+      const userData = affinity._getUserData(userId)
+      const dailyCapBonus = shop.getEquippedBonus(userId, 'daily_cap_bonus')
+      const dailyCap = (finalConfig.dailyAffinityMax ?? 50) + dailyCapBonus
+      const todayUsed = String(userData.lastDate || '') === today ? Number(userData.dailyCount || 0) : 0
+      const todayRemaining = Math.max(0, dailyCap - todayUsed)
+
+      const snapshot = ticketRewardLedger.getSnapshot(userId, today)
+      const claims = snapshot.claims || {}
+
+      const rewardLabels = {
+        daily_quote: '每日酒狐',
+        fortune: '占卜',
+        weather: '天气',
+        omikuji: '抽签',
+        story: '故事',
+        rps_win: '猜拳胜利',
+        guess_win_high: '猜数胜利(高)',
+        guess_win_mid: '猜数胜利(中)',
+        guess_win_low: '猜数胜利(低)',
+        quiz_correct: '问答答对',
+      }
+
+      const rewardOrder = Object.keys(TICKET_REWARD_RULES)
+
+      const lines = [
+        '== 酒狐账本 ==',
+        '',
+        `日期: ${today}`,
+        `用户: ${userId}（${modeLabel}）`,
+        '',
+        `狐狐券余额: ${status.tickets} 张`,
+        `今日好感上限: ${todayUsed}/${dailyCap}（剩余 ${todayRemaining}）${dailyCapBonus > 0 ? `  +装备加成${dailyCapBonus}` : ''}`,
+        '',
+        '今日狐狐券奖励次数（按玩法）：',
+        ...rewardOrder.map((key) => {
+          const rule = TICKET_REWARD_RULES[key]
+          const used = Number(claims[key] || 0)
+          const limit = Number(rule.dailyLimit || 0)
+          const remaining = Math.max(0, limit - used)
+          const label = rewardLabels[key] || key
+          return `- ${label}: ${used}/${limit}（剩余 ${remaining}）· 单次 +${rule.amount}`
+        }),
+        '',
+        '说明：',
+        '- 领满后仍可继续使用指令，但不会再获得对应玩法的狐狐券奖励。',
+        '- 若今日好感已达上限，互动类指令会提示“今日好感已达到上限”。',
+      ]
+
+      return lines.join('\n')
     })
 
   // ===== 酒狐图鉴 =====
@@ -2489,6 +2644,126 @@ exports.apply = (ctx, config = {}) => {
       return ok ? `语录重载成功！共 ${quotesLoader.count} 条语录，${quotesLoader.categoryNames.length} 个分类。` : '语录重载失败。'
     })
 
+  // ===== 玩家存档备份/恢复（仅 opsAdminIds） =====
+  ctx.command('酒狐存档备份', '备份玩家存档（仅指定管理员）', { authority: 3 })
+    .action(async ({ session }) => {
+      const deny = requireOpsAdmin(session, '存档备份')
+      if (deny) return deny
+
+      const backupRootDir = getDefaultBackupRootDir(__dirname)
+      const result = await createPlayerBackup({
+        memoryDir,
+        backupRootDir,
+        pluginVersion,
+        includeFiles: DEFAULT_PLAYER_MEMORY_FILES,
+        logger,
+      })
+
+      return [
+        '酒狐悄悄话: 存档备份完成。',
+        '',
+        `- 备份ID: ${result.id}`,
+        `- 备份目录: ${result.backupDir}`,
+        `- 备份文件: ${result.included.length} 个`,
+        `- 缺失跳过: ${result.missing.length} 个`,
+        `- 总大小: ${formatBytes(result.totalBytes)}`,
+        '',
+        '说明：本备份只包含玩家数据相关存档文件，不包含季节循环/全局主题等全局状态。',
+      ].join('\n')
+    })
+
+  ctx.command('酒狐存档列表 [count:number]', '查看存档备份列表（仅指定管理员）', { authority: 3 })
+    .action(async ({ session }, count) => {
+      const deny = requireOpsAdmin(session, '查看备份列表')
+      if (deny) return deny
+
+      const backupRootDir = getDefaultBackupRootDir(__dirname)
+      const list = await listPlayerBackups(backupRootDir, count || 10)
+      if (list.length === 0) {
+        return [
+          '酒狐悄悄话: 当前没有找到任何存档备份。',
+          `备份目录: ${backupRootDir}`,
+          '可用「酒狐存档备份」创建一次备份。',
+        ].join('\n')
+      }
+
+      return [
+        `== 酒狐存档列表（最近 ${list.length} 个） ==`,
+        `备份目录: ${backupRootDir}`,
+        '',
+        ...list.map((item, index) => {
+          const created = item.createdAt ? item.createdAt.replace('T', ' ').replace('Z', '') : 'unknown'
+          return `${index + 1}. ${item.id} · files=${item.fileCount} · size=${formatBytes(item.totalBytes)} · at=${created}`
+        }),
+        '',
+        '恢复示例：',
+        '酒狐存档恢复 备份ID -f',
+      ].join('\n')
+    })
+
+  ctx.command('酒狐存档恢复 <id:text>', '从备份恢复玩家存档（危险，仅指定管理员）', { authority: 3 })
+    .option('force', '-f 强制执行（会覆盖现有玩家存档）')
+    .action(async ({ session, options }, id) => {
+      const deny = requireOpsAdmin(session, '存档恢复')
+      if (deny) return deny
+
+      const backupRootDir = getDefaultBackupRootDir(__dirname)
+      const backupDir = await resolvePlayerBackupDir(backupRootDir, id)
+      if (!backupDir) {
+        const list = await listPlayerBackups(backupRootDir, 5)
+        return [
+          `酒狐悄悄话: 未找到备份「${String(id || '').trim() || '(空)'}」。`,
+          `备份目录: ${backupRootDir}`,
+          '',
+          list.length > 0 ? '最近备份：' : '当前没有备份。',
+          ...list.map((item) => `- ${item.id} (${formatBytes(item.totalBytes)})`),
+          '',
+          '提示：可用「酒狐存档列表」查看全部备份。',
+        ].filter(Boolean).join('\n')
+      }
+
+      if (!options?.force) {
+        return [
+          '酒狐悄悄话: 存档恢复是危险操作，会覆盖现有玩家存档。',
+          '',
+          `目标备份: ${backupDir}`,
+          '',
+          '如果你确认要恢复，请使用：',
+          `酒狐存档恢复 ${String(id || '').trim() || 'latest'} -f`,
+        ].join('\n')
+      }
+
+      // 安全措施：恢复前自动做一次“当前玩家存档备份”
+      const pre = await createPlayerBackup({
+        memoryDir,
+        backupRootDir,
+        pluginVersion,
+        includeFiles: DEFAULT_PLAYER_MEMORY_FILES,
+        logger,
+      })
+
+      const restored = await restorePlayerBackup({
+        backupDir,
+        memoryDir,
+        logger,
+      })
+
+      return [
+        '酒狐悄悄话: 存档恢复完成。',
+        '',
+        `- 已自动创建恢复前备份: ${pre.id}`,
+        `- 使用的备份目录: ${backupDir}`,
+        `- 已恢复文件: ${restored.restored} 个`,
+        `- 缺失跳过: ${restored.missing.length} 个`,
+        `- 写入大小: ${formatBytes(restored.totalBytes)}`,
+        '',
+        '说明：本恢复仅覆盖玩家数据相关存档文件，不包含季节循环/全局主题等全局状态。',
+        '',
+        '重要提示：请尽快重启 WineFox-Daily 插件（或重启 Koishi）。',
+        '原因：多数子系统在启动时把存档加载到内存；如果不重启，旧的内存数据可能会继续运行并覆盖你刚恢复的文件。',
+      ].join('\n')
+    })
+
   ctx.command('酒狐缓存清理', '清理 WineFox 图片渲染缓存（仅内存）', { authority: 3 })
     .action(() => {
       const status = renderCache?.getStatus?.()
@@ -2512,97 +2787,169 @@ exports.apply = (ctx, config = {}) => {
       ].filter(Boolean).join('\n')
     })
 
-  ctx.command('酒狐诊断', '查看酒狐运行状态与存档健康', { authority: 3 })
-    .option('image', '-i 输出图片卡片')
-    .action(async ({ options }) => {
-      const version = pluginVersion
+  ctx.command('酒狐渲染统计 [count:number]', '查看最近 N 次图片渲染统计', { authority: 3 })
+    .option('clear', '-c 清空统计')
+    .action(({ options }, count) => {
+      if (!renderMetrics) return '酒狐悄悄话: 渲染统计不可用。'
 
-      const puppeteerAvailable = hasPuppeteer(ctx)
-      const theme = getActiveCardThemeInfo()
-      const limiterStatus = imageRenderLimiter?.getStatus?.() || { enabled: false }
-      const cacheStatus = renderCache?.getStatus?.() || { enabled: false }
+      if (options?.clear) {
+        const cleared = renderMetrics.clear()
+        return `酒狐悄悄话: 已清空渲染统计（清理 ${cleared} 条记录）。`
+      }
 
-      const jsonFiles = [
-        ['好感度', path.join(memoryDir, 'affinity.json')],
-        ['背包', path.join(memoryDir, 'inventory.json')],
-        ['委托', path.join(memoryDir, 'commission.json')],
-        ['收藏', path.join(memoryDir, 'favorites.json')],
-        ['季节循环', path.join(memoryDir, 'season-cycle.json')],
-        ['主题配置', path.join(memoryDir, 'ui-theme.json')],
-        ['狐狐券账本', path.join(memoryDir, 'ticket-reward-ledger.json')],
-        ['签到', path.join(memoryDir, 'checkin.json')],
-        ['酿酒', path.join(memoryDir, 'brewing.json')],
-        ['问答', path.join(memoryDir, 'quiz.json')],
-        ['成就', path.join(memoryDir, 'achievements.json')],
-        ['每日酒狐', path.join(memoryDir, 'daily.json')],
-        ['近期历史', path.join(memoryDir, 'recent_history.json')],
-        ['投稿队列', path.join(memoryDir, 'pending_submissions.json')],
-        ['故事历史', path.join(memoryDir, 'story_history.json')],
-      ]
-
-      const fileStats = jsonFiles.map(([label, filePath]) => ({
-        label,
-        filePath,
-        ...inspectJsonFile(filePath),
-      }))
-
-      const okCount = fileStats.filter(item => item.exists && item.ok === true).length
-      const badCount = fileStats.filter(item => item.exists && item.ok === false).length
-      const skippedCount = fileStats.filter(item => item.exists && item.ok === null).length
-      const missingCount = fileStats.filter(item => !item.exists).length
+      const n = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 50
+      const summary = renderMetrics.getSummary(n)
+      const recent = renderMetrics.getRecent(Math.min(20, n))
 
       const lines = [
-        '== 酒狐诊断 ==',
+        `== 酒狐渲染统计（最近 ${summary.windowCount} 条） ==`,
         '',
-        `版本: ${version}`,
-        `Puppeteer: ${puppeteerAvailable ? '可用' : '不可用'}`,
-        `主题: ${theme.name} (${theme.id})`,
-        `运行时配置: ${runtimeConfigSource}`,
-        `渲染队列: ${limiterStatus.enabled ? `启用 max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued} timeout=${limiterStatus.defaultTimeoutMs}ms` : '未启用'}`,
-        `图片缓存: ${cacheStatus.enabled ? `启用 size=${cacheStatus.size}/${cacheStatus.maxEntries} hits=${cacheStatus.hits} misses=${cacheStatus.misses}` : '未启用'}`,
+        `OK/FAIL: ${summary.okCount}/${summary.failCount}（OK率 ${summary.okRate.toFixed(1)}%）`,
+        `渲染尝试: ${summary.attemptCount}（成功 ${summary.attemptOkCount} / 失败 ${summary.attemptFailCount} / 成功率 ${summary.attemptOkRate.toFixed(1)}%）`,
+        `缓存命中: ${summary.cacheHits}（命中率 ${summary.cacheHitRate.toFixed(1)}%）`,
+        `平均排队等待: ${summary.avgWaitMs}ms`,
+        `平均渲染耗时: ${summary.avgRenderMs}ms`,
+        `平均总耗时: ${summary.avgTotalMs}ms`,
+        summary.failCount > 0
+          ? `失败原因: ${Object.entries(summary.failuresByReason).map(([k, v]) => `${k}=${v}`).join(' / ')}`
+          : '失败原因: (无)',
         '',
-        `memoryDir: ${memoryDir}`,
-        `存档健康: OK ${okCount} / BAD ${badCount} / SKIP ${skippedCount} / MISSING ${missingCount}`,
-        '',
-        '存档详情:',
-        ...fileStats.map((item) => {
-          const status = item.exists
-            ? (item.ok === true ? 'OK' : (item.ok === false ? `BAD(${item.error})` : 'SKIP(过大未解析)'))
-            : 'MISSING'
-          return `- ${item.label}: ${status} ${formatBytes(item.bytes)}`
+        '最近记录（最新在上）：',
+        ...recent.map((e) => {
+          const time = new Date(e.ts).toISOString().slice(11, 19)
+          const status = e.ok ? 'OK' : 'FAIL'
+          const cache = e.cacheHit ? 'cache=hit' : 'cache=miss'
+          const wait = e.waitMs ? `wait=${Math.round(e.waitMs)}ms` : 'wait=0ms'
+          const render = e.renderMs ? `render=${Math.round(e.renderMs)}ms` : 'render=0ms'
+          const total = e.totalMs ? `total=${Math.round(e.totalMs)}ms` : 'total=0ms'
+          const reason = e.reason ? `reason=${e.reason}` : ''
+          const feature = e.feature || 'unknown'
+          return `- ${time} ${feature} ${status} ${reason} ${cache} ${wait} ${render} ${total}`
         }),
-      ]
+      ].filter(Boolean)
 
-      if (!options?.image || !puppeteerAvailable) return lines.join('\n')
+      return lines.join('\n')
+    })
 
-      const rows = [
-        ['版本', version],
-        ['Puppeteer', puppeteerAvailable ? '可用' : '不可用'],
-        ['主题', `${theme.name} (${theme.id})`],
-        ['运行时配置', runtimeConfigSource],
-        ['渲染队列', limiterStatus.enabled ? `max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued}` : '未启用'],
-        ['图片缓存', cacheStatus.enabled ? `size=${cacheStatus.size}/${cacheStatus.maxEntries}` : '未启用'],
-        ['存档健康', `OK ${okCount} / BAD ${badCount} / MISSING ${missingCount}`],
-      ]
+  async function runRenderDiagnosis(options = {}) {
+    const version = pluginVersion
 
-      const renderTask = () => renderDiagnosticsCard(ctx, {
-        data: {
-          title: '酒狐诊断',
-          subtitle: '运行状态摘要',
-          tip: '用于快速确认 Puppeteer/主题/存档状态。更详细信息请用文字版「酒狐诊断」。',
-          rows,
-          footerText: `WineFox-Daily v${version}`,
-        },
-      })
+    const puppeteerAvailable = hasPuppeteer(ctx)
+    const theme = getActiveCardThemeInfo()
+    const limiterStatus = imageRenderLimiter?.getStatus?.() || { enabled: false }
+    const cacheStatus = renderCache?.getStatus?.() || { enabled: false }
+    const metricsSummary = renderMetrics?.getSummary?.(50) || {
+      windowCount: 0,
+      attemptCount: 0,
+      attemptOkCount: 0,
+      attemptFailCount: 0,
+      attemptOkRate: 0,
+      cacheHitRate: 0,
+      avgWaitMs: 0,
+      avgRenderMs: 0,
+      failuresByReason: {},
+    }
 
-      try {
-        return imageRenderLimiter
-          ? await imageRenderLimiter.run(renderTask, finalConfig.imageRenderQueueTimeout)
-          : await renderTask()
-      } catch (err) {
-        logger.warn('[fox] 酒狐诊断图片渲染失败，将回退文字输出', err)
-        return lines.join('\n')
-      }
+    const jsonFiles = [
+      ['好感度', path.join(memoryDir, 'affinity.json')],
+      ['背包', path.join(memoryDir, 'inventory.json')],
+      ['委托', path.join(memoryDir, 'commission.json')],
+      ['收藏', path.join(memoryDir, 'favorites.json')],
+      ['偏好设置', path.join(memoryDir, 'prefs.json')],
+      ['狐狐券账本', path.join(memoryDir, 'ticket-reward-ledger.json')],
+      ['签到', path.join(memoryDir, 'checkin.json')],
+      ['酿酒', path.join(memoryDir, 'brewing.json')],
+      ['问答', path.join(memoryDir, 'quiz.json')],
+      ['成就', path.join(memoryDir, 'achievements.json')],
+      ['每日酒狐', path.join(memoryDir, 'daily.json')],
+      ['近期历史', path.join(memoryDir, 'recent_history.json')],
+      ['投稿队列', path.join(memoryDir, 'pending_submissions.json')],
+      ['故事历史', path.join(memoryDir, 'story_history.json')],
+    ]
+
+    const fileStats = jsonFiles.map(([label, filePath]) => ({
+      label,
+      filePath,
+      ...inspectJsonFile(filePath),
+    }))
+
+    const okCount = fileStats.filter(item => item.exists && item.ok === true).length
+    const badCount = fileStats.filter(item => item.exists && item.ok === false).length
+    const skippedCount = fileStats.filter(item => item.exists && item.ok === null).length
+    const missingCount = fileStats.filter(item => !item.exists).length
+
+    const lines = [
+      '== 酒狐渲染诊断 ==',
+      '',
+      `版本: ${version}`,
+      `Puppeteer: ${puppeteerAvailable ? '可用' : '不可用'}`,
+      `主题(全局): ${theme.name} (${theme.id})`,
+      `运行时配置: ${runtimeConfigSource}`,
+      `渲染队列: ${limiterStatus.enabled ? `启用 max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued} timeout=${limiterStatus.defaultTimeoutMs}ms` : '未启用'}`,
+      `图片缓存: ${cacheStatus.enabled ? `启用 size=${cacheStatus.size}/${cacheStatus.maxEntries} hits=${cacheStatus.hits} misses=${cacheStatus.misses}` : '未启用'}`,
+      `渲染统计(最近 ${metricsSummary.windowCount}): 尝试 ${metricsSummary.attemptCount} | 成功率 ${metricsSummary.attemptOkRate.toFixed(1)}% | 命中率 ${metricsSummary.cacheHitRate.toFixed(1)}% | wait ${metricsSummary.avgWaitMs}ms | render ${metricsSummary.avgRenderMs}ms`,
+      metricsSummary.attemptFailCount > 0
+        ? `失败原因: ${Object.entries(metricsSummary.failuresByReason).map(([k, v]) => `${k}=${v}`).join(' / ')}`
+        : '',
+      '',
+      `memoryDir: ${memoryDir}`,
+      `存档健康: OK ${okCount} / BAD ${badCount} / SKIP ${skippedCount} / MISSING ${missingCount}`,
+      '',
+      '存档详情:',
+      ...fileStats.map((item) => {
+        const status = item.exists
+          ? (item.ok === true ? 'OK' : (item.ok === false ? `BAD(${item.error})` : 'SKIP(过大未解析)'))
+          : 'MISSING'
+        return `- ${item.label}: ${status} ${formatBytes(item.bytes)}`
+      }),
+    ].filter(Boolean)
+
+    if (!options?.image || !puppeteerAvailable) return lines.join('\n')
+
+    const rows = [
+      ['版本', version],
+      ['Puppeteer', puppeteerAvailable ? '可用' : '不可用'],
+      ['主题', `${theme.name} (${theme.id})`],
+      ['运行时配置', runtimeConfigSource],
+      ['渲染队列', limiterStatus.enabled ? `max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued}` : '未启用'],
+      ['图片缓存', cacheStatus.enabled ? `size=${cacheStatus.size}/${cacheStatus.maxEntries}` : '未启用'],
+      ['渲染统计', `尝试${metricsSummary.attemptCount} 成功率${metricsSummary.attemptOkRate.toFixed(0)}% 命中率${metricsSummary.cacheHitRate.toFixed(0)}%`],
+      ['存档健康', `OK ${okCount} / BAD ${badCount} / MISSING ${missingCount}`],
+    ]
+
+    const renderTask = () => renderDiagnosticsCard(ctx, {
+      data: {
+        title: '酒狐渲染诊断',
+        subtitle: '运行状态摘要',
+        tip: '用于快速确认 Puppeteer/主题/渲染队列/缓存/统计与存档健康。更详细信息请用文字版「酒狐渲染诊断」。',
+        rows,
+        footerText: `WineFox-Daily v${version}`,
+      },
+    })
+
+    try {
+      return imageRenderLimiter?.runWithMetrics
+        ? (await imageRenderLimiter.runWithMetrics(renderTask, finalConfig.imageRenderQueueTimeout)).value
+        : await renderTask()
+    } catch (err) {
+      logger.warn('[fox] 酒狐渲染诊断图片渲染失败，将回退文字输出', err)
+      return lines.join('\n')
+    }
+  }
+
+  ctx.command('酒狐渲染诊断', '查看图片渲染链路与存档健康', { authority: 3 })
+    .option('image', '-i 输出图片卡片')
+    .action(async ({ options }) => {
+      return await runRenderDiagnosis(options)
+    })
+
+  // 兼容旧命令：酒狐诊断 -> 酒狐渲染诊断（不破坏现状）
+  ctx.command('酒狐诊断', '（已更名）查看图片渲染链路与存档健康', { authority: 3 })
+    .option('image', '-i 输出图片卡片')
+    .action(async ({ options }) => {
+      const result = await runRenderDiagnosis(options)
+      if (options?.image) return result
+      return `（提示：该指令已更名为「酒狐渲染诊断」）\n\n${result}`
     })
 
   ctx.command('酒狐渲染自检', '渲染一张最小诊断卡片（验证生图链路）', { authority: 3 })
