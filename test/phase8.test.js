@@ -132,12 +132,13 @@ async function testTicketRewardLedgerClaimLimit() {
 
 async function testShopItemsExpandedAndIconCovered() {
   const items = require('../data/shop_items')
-  const { getItemIconSpec } = require('../lib/card-renderer')
+  const { getItemIconSpec, hasItemIconSpec } = require('../lib/card-renderer')
 
   assert.ok(items.length >= 60, '商店商品数量应扩充到至少 60 件')
   for (const item of items) {
     const spec = getItemIconSpec(item.id)
     assert.ok(spec && spec.kind, `商品 ${item.id} 应有对应的图标规格`)
+    assert.strictEqual(hasItemIconSpec(item.id), true, `商品 ${item.id} 应提供专属矢量图标（不可回退为默认 box 图标）`)
   }
 }
 
