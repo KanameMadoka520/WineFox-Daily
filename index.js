@@ -1977,6 +1977,10 @@ exports.apply = (ctx, config = {}) => {
           const bonus = 1 * multiplier
           await shop.setTempEffect(session.userId, 'next_affinity_bonus', bonus)
           extraLines.push(`下一次互动额外好感 +${bonus}`)
+        } else if (result.effect === 'next_affinity_boost_medium') {
+          const bonus = 3 * multiplier
+          await shop.setTempEffect(session.userId, 'next_affinity_bonus', bonus)
+          extraLines.push(`下一次互动额外好感 +${bonus}`)
         } else if (result.effect === 'cooldown_reset') {
           clearUserCooldowns(session.userId)
           extraLines.push('互动冷却已全部重置')

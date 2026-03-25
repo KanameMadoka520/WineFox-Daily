@@ -134,7 +134,7 @@ async function testShopItemsExpandedAndIconCovered() {
   const items = require('../data/shop_items')
   const { getItemIconSpec } = require('../lib/card-renderer')
 
-  assert.ok(items.length >= 38, '商店商品数量应扩充到至少 38 件')
+  assert.ok(items.length >= 48, '商店商品数量应扩充到至少 48 件')
   for (const item of items) {
     const spec = getItemIconSpec(item.id)
     assert.ok(spec && spec.kind, `商品 ${item.id} 应有对应的图标规格`)

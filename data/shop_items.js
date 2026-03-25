@@ -70,6 +70,18 @@ module.exports = [
     effectText: '（狐尾胸针在衣襟前轻轻晃动着~）',
     bonus: { type: 'passive_affinity_bonus', value: 1 },
   },
+  {
+    id: 'paw_gloves',
+    name: '软爪手套',
+    type: 'equip',
+    levelRequired: 2,
+    price: 52,
+    description: '绒绒的软爪手套，戴上后互动的冷却会缩短一些，让你更快再来摸摸酒狐。',
+    buyLine: '酒狐悄悄话: 手套里面居然还有小肉垫！主人...这是专门给酒狐准备的吗？',
+    equipLine: '酒狐悄悄话: 软爪手套戴好了~这样主人想摸摸我的时候，就能更快再来啦。',
+    effectText: '（软爪手套上的小肉垫软软的~）',
+    bonus: { type: 'cooldown_reduction', value: 0.1 },
+  },
 
   // ===== 进阶装备 (Lv4) =====
   {
@@ -119,6 +131,30 @@ module.exports = [
     equipLine: '酒狐悄悄话: 午茶披肩披好了~今天和主人说话的时候，会更想靠近一点。',
     effectText: '（带着暖香的小披肩轻轻搭在酒狐肩上~）',
     bonus: { type: 'affinity_bonus', value: 1 },
+  },
+  {
+    id: 'quest_badge',
+    name: '委托徽章',
+    type: 'equip',
+    levelRequired: 4,
+    price: 220,
+    description: '刻着小狐狸爪印的徽章，佩戴后完成委托时更容易拿到额外的狐狐券奖励。',
+    buyLine: '酒狐悄悄话: 徽章上还有小狐狸爪印！主人这是在给酒狐发“认真工作奖”吗？',
+    equipLine: '酒狐悄悄话: 委托徽章别好了~酒狐会更认真帮主人把任务盯紧的！',
+    effectText: '（委托徽章在衣襟上闪着细小的光~）',
+    bonus: { type: 'commission_bonus', value: 0.15 },
+  },
+  {
+    id: 'spring_pouch',
+    name: '春芽香囊',
+    type: 'equip',
+    levelRequired: 4,
+    price: 195,
+    description: '装着春天香气的小香囊，让酒狐每天更有精神，能略微提高每日可获得的好感上限。',
+    buyLine: '酒狐悄悄话: 香囊里有青草和花的味道...像春天一样！酒狐好喜欢~',
+    equipLine: '酒狐悄悄话: 春芽香囊挂好了~今天感觉特别有精神，想多陪主人一会儿。',
+    effectText: '（香囊散出淡淡的春日气息~）',
+    bonus: { type: 'daily_cap_bonus', value: 3 },
   },
 
   // ===== 高级装备 (Lv6) =====
@@ -181,6 +217,18 @@ module.exports = [
     equipLine: '酒狐悄悄话: 银羽罗盘挂好了~要是群里出现了好玩的事，酒狐一定会第一时间发现！',
     effectText: '（银羽罗盘的指针轻轻摆动，像在追逐风声~）',
     bonus: { type: 'passive_chance_bonus', value: 0.08 },
+  },
+  {
+    id: 'sunrise_charm',
+    name: '晨光护符',
+    type: 'equip',
+    levelRequired: 6,
+    price: 410,
+    description: '像把清晨第一缕阳光收进了护符里。佩戴后每日签到的狐狐券奖励会更丰厚。',
+    buyLine: '酒狐悄悄话: 这颗护符亮亮的...像早晨窗边的那束阳光。酒狐想把它一直带着~',
+    equipLine: '酒狐悄悄话: 晨光护符戴上啦~今天签到的时候，酒狐一定会多准备一点奖励！',
+    effectText: '（护符里像有一束晨光在微微流动~）',
+    bonus: { type: 'checkin_ticket_bonus', value: 4 },
   },
 
   // ===== 传说装备 (Lv8) =====
@@ -256,6 +304,18 @@ module.exports = [
     effectText: '（极光色的羽带在酒狐耳边轻轻闪动~）',
     bonus: { type: 'checkin_ticket_bonus', value: 5 },
   },
+  {
+    id: 'scholar_notebook',
+    name: '学者笔记',
+    type: 'equip',
+    levelRequired: 8,
+    price: 980,
+    description: '写满整齐笔记的小本子，翻开时像有人在耳边提醒答案。佩戴后问答答对会额外多拿狐狐券。',
+    buyLine: '酒狐悄悄话: 这本笔记写得好认真...主人是想让我也变得更聪明一点吗？',
+    equipLine: '酒狐悄悄话: 学者笔记收好啦~下次主人问答的时候，酒狐会更有把握地给你奖励！',
+    effectText: '（笔记本的纸页沙沙作响，像在悄悄提示答案~）',
+    bonus: { type: 'quiz_ticket_bonus', value: 4 },
+  },
 
   // ===== 日用消耗品 =====
   {
@@ -289,6 +349,17 @@ module.exports = [
     description: 'C418的经典唱片「cat」，放来一起听吧，会让下一次互动额外更温柔。',
     buyLine: '酒狐悄悄话: C418的唱片「cat」！这首曲子酒狐最喜欢了~放来听听？',
     useLine: '酒狐悄悄话: ♪~好舒缓的旋律~酒狐靠在主人身边听着音乐...下一次和主人说话时，我一定会更温柔的。',
+    effect: 'next_affinity_boost_small',
+  },
+  {
+    id: 'hot_cocoa',
+    name: '热可可',
+    type: 'consumable',
+    levelRequired: 2,
+    price: 14,
+    description: '热乎乎的可可，捧在手心里就像抱着一团小太阳。使用后下一次互动会更亲近。',
+    buyLine: '酒狐悄悄话: 可可！闻起来甜甜的...主人也喝一口吗？',
+    useLine: '酒狐悄悄话: 暖暖的可可顺着喉咙流下去...酒狐好安心。下一次互动时，我会更想贴近主人一点。',
     effect: 'next_affinity_boost_small',
   },
   {
@@ -392,6 +463,17 @@ module.exports = [
     useLine: '酒狐悄悄话: 嚼起来松松的...像一口咬在云朵上。酒狐突然有点想犯懒，靠着主人休息一会儿...',
     effect: 'mood_lazy',
   },
+  {
+    id: 'plum_wine',
+    name: '梅子酒',
+    type: 'consumable',
+    levelRequired: 4,
+    price: 44,
+    description: '酸酸甜甜的梅子酒，轻轻一抿就会脸颊发烫。（心情→微醺）',
+    buyLine: '酒狐悄悄话: 梅子酒...酸酸甜甜的那种吗？酒狐有点期待~',
+    useLine: '酒狐悄悄话: 嗯...酸甜的味道在嘴里散开了...酒狐、酒狐好像有点微醺了~(心情->微醺)',
+    effect: 'mood_tipsy',
+  },
 
   // ===== 高级消耗品 =====
   {
@@ -414,6 +496,28 @@ module.exports = [
     description: '颜色一直在变的神奇药水，喝下后会随机推进一项成就进度。',
     buyLine: '酒狐悄悄话: 这瓶药水颜色一直在变...红色...蓝色...绿色...主人确定要买？',
     useLine: '酒狐悄悄话: 咕嘟...嗯？世界在旋转...酒狐好像突然想起了某些以前没注意到的事...',
+    effect: 'mystery_potion',
+  },
+  {
+    id: 'mulled_wine',
+    name: '热红酒',
+    type: 'consumable',
+    levelRequired: 6,
+    price: 74,
+    description: '加了香料的热红酒，喝下去会让心里暖起来。使用后下一次互动会获得更多额外好感。',
+    buyLine: '酒狐悄悄话: 热红酒？闻起来有肉桂和橙皮的香味...酒狐喜欢这种暖暖的感觉~',
+    useLine: '酒狐悄悄话: 呼...暖暖的热红酒把心都烫软了。下一次互动的时候，酒狐会更想把更多心意给主人。',
+    effect: 'next_affinity_boost_medium',
+  },
+  {
+    id: 'secret_map',
+    name: '藏宝图碎片',
+    type: 'consumable',
+    levelRequired: 6,
+    price: 66,
+    description: '一张奇怪的藏宝图碎片，边缘还沾着星砂。使用后会随机推进一项成就进度。',
+    buyLine: '酒狐悄悄话: 这张纸上画着奇怪的路线...主人是想带酒狐去寻宝吗？',
+    useLine: '酒狐悄悄话: 把碎片拼在一起...酒狐突然想起了某些以前没注意到的目标。也许成就会被悄悄推进哦。',
     effect: 'mystery_potion',
   },
   {
@@ -469,6 +573,17 @@ module.exports = [
     description: '装着几块月光色点心的礼盒，打开后总会掉出一点稀有的小惊喜。',
     buyLine: '酒狐悄悄话: 这个盒子摸起来凉凉的...里面不会装着月亮吧？酒狐有点期待了。',
     useLine: '酒狐悄悄话: 打开盒子的瞬间，香气一下子就飘出来了...酒狐好像也跟着想起了一点珍贵的小秘密。',
+    effect: 'random_rare',
+  },
+  {
+    id: 'sealed_letter',
+    name: '封蜡信',
+    type: 'consumable',
+    levelRequired: 8,
+    price: 132,
+    description: '带着星辉封蜡的信封，拆开后总能读到一段稀有而珍贵的悄悄话。',
+    buyLine: '酒狐悄悄话: 信封上有封蜡...像是在等主人亲手拆开。',
+    useLine: '酒狐悄悄话: 封蜡“咔哒”一声碎开了...信里好像藏着一段很珍贵的悄悄话。',
     effect: 'random_rare',
   },
 ]
