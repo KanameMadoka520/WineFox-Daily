@@ -104,6 +104,7 @@ const {
   getDefaultBackupRootDir,
   createPlayerBackup,
   listPlayerBackups,
+  cleanupPlayerBackups,
   resolvePlayerBackupDir,
   restorePlayerBackup,
 } = require('./lib/player-backup')
@@ -2699,6 +2700,62 @@ exports.apply = (ctx, config = {}) => {
         '恢复示例：',
         '酒狐存档恢复 备份ID -f',
       ].join('\n')
+    })
+
+  ctx.command('酒狐存档清理 [keep:number]', '清理旧的存档备份（仅 opsAdminIds）', { authority: 0 })
+    .option('dry', '-n 仅预览，不实际删除')
+    .action(async ({ session, options }, keep) => {
+      const deny = requireOpsAdmin(session, '清理存档备份')
+      if (deny) return deny
+
+      const keepCount = (keep === undefined || keep === null)
+        ? 10
+        : (Number.isFinite(keep) ? Math.floor(keep) : NaN)
+
+      if (!Number.isFinite(keepCount) || keepCount < 1) {
+        return [
+          '酒狐悄悄话: 参数错误。',
+          '',
+          '用法：',
+          '- 酒狐存档清理        # 默认保留 10 个备份',
+          '- 酒狐存档清理 20     # 只保留最近 20 个备份',
+          '- 酒狐存档清理 -n     # 仅预览，不删除',
+          '',
+          '提示：为了防止误操作，保留数最小为 1。',
+        ].join('\n')
+      }
+
+      const backupRootDir = getDefaultBackupRootDir(__dirname)
+      const result = await cleanupPlayerBackups(backupRootDir, keepCount, { dryRun: !!options?.dry })
+
+      if (!result.exists || result.total === 0) {
+        return [
+          '酒狐悄悄话: 当前没有找到任何存档备份。',
+          `备份目录: ${backupRootDir}`,
+          '可用「酒狐存档备份」创建一次备份。',
+        ].join('\n')
+      }
+
+      const preview = !!options?.dry
+      const deleted = Array.isArray(result.deleted) ? result.deleted : []
+      const failed = Array.isArray(result.failed) ? result.failed : []
+
+      const listLines = deleted.slice(0, 20).map(item => `- ${item.id}`)
+      const more = deleted.length > 20 ? `...（还有 ${deleted.length - 20} 个未展示）` : ''
+
+      return [
+        `== 酒狐存档清理（${preview ? '预览' : '已执行'}） ==`,
+        `备份目录: ${backupRootDir}`,
+        '',
+        `总备份: ${result.total}`,
+        `保留: ${result.keep}`,
+        preview ? `将删除: ${result.deleteCount}` : `已删除: ${deleted.length}`,
+        failed.length > 0 ? `删除失败: ${failed.length}` : '',
+        '',
+        preview ? '将删除的备份ID（最新在上，最多展示 20 个）：' : '已删除的备份ID（最新在上，最多展示 20 个）：',
+        ...listLines,
+        more,
+      ].filter(Boolean).join('\n')
     })
 
   ctx.command('酒狐存档恢复 <id:text>', '从备份恢复玩家存档（危险，仅 opsAdminIds）', { authority: 0 })
