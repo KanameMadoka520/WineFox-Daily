@@ -108,6 +108,7 @@ WineFox-Daily/
 11. 涉及“敏感运维/高风险写操作”的指令（例如存档恢复、查询他人账本）必须额外校验 `opsAdminIds`：
     - 不能只依赖 Koishi `authority`
     - `opsAdminIds` 为空时应拒绝执行并给出配置提示
+    - 建议将该类指令的 `authority` 设为 `0`，确保权限只由 `opsAdminIds` 控制（避免不同宿主的 authority 配置差异导致误放行）
 
 ### 图片卡片相关约定
 

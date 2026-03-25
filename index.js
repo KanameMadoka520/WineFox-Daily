@@ -2645,7 +2645,7 @@ exports.apply = (ctx, config = {}) => {
     })
 
   // ===== 玩家存档备份/恢复（仅 opsAdminIds） =====
-  ctx.command('酒狐存档备份', '备份玩家存档（仅指定管理员）', { authority: 3 })
+  ctx.command('酒狐存档备份', '备份玩家存档（仅 opsAdminIds）', { authority: 0 })
     .action(async ({ session }) => {
       const deny = requireOpsAdmin(session, '存档备份')
       if (deny) return deny
@@ -2672,7 +2672,7 @@ exports.apply = (ctx, config = {}) => {
       ].join('\n')
     })
 
-  ctx.command('酒狐存档列表 [count:number]', '查看存档备份列表（仅指定管理员）', { authority: 3 })
+  ctx.command('酒狐存档列表 [count:number]', '查看存档备份列表（仅 opsAdminIds）', { authority: 0 })
     .action(async ({ session }, count) => {
       const deny = requireOpsAdmin(session, '查看备份列表')
       if (deny) return deny
@@ -2701,7 +2701,7 @@ exports.apply = (ctx, config = {}) => {
       ].join('\n')
     })
 
-  ctx.command('酒狐存档恢复 <id:text>', '从备份恢复玩家存档（危险，仅指定管理员）', { authority: 3 })
+  ctx.command('酒狐存档恢复 <id:text>', '从备份恢复玩家存档（危险，仅 opsAdminIds）', { authority: 0 })
     .option('force', '-f 强制执行（会覆盖现有玩家存档）')
     .action(async ({ session, options }, id) => {
       const deny = requireOpsAdmin(session, '存档恢复')

@@ -357,6 +357,7 @@ v2.3 已将旧版 6 级好感扩展为 **10 级**，并细化成长节奏。
 注意：
 
 - 若 `opsAdminIds` 为空，上述敏感指令会直接拒绝执行（即使你有 Koishi 的 authority）
+- 上述敏感指令的 `authority` 设为 `0`，权限**完全由** `opsAdminIds` 控制（避免 Koishi 权限配置差异影响）
 - 普通的管理员指令（例如 `酒狐UI` / `酒狐渲染诊断`）仍然按 authority 控制
 
 ### 0.1) 玩家存档备份/恢复（仅 opsAdminIds）
