@@ -91,6 +91,7 @@ const MemoirSystem = require('./lib/memoir')
 const QuizSystem = require('./lib/quiz')
 const BrewingSystem = require('./lib/brewing')
 const ShopSystem = require('./lib/shop')
+const DynamicShopSystem = require('./lib/dynamic-shop')
 const CommissionSystem = require('./lib/commission')
 const dailyFree = require('./lib/daily-free')
 const UIThemeSystem = require('./lib/ui-theme')
@@ -504,6 +505,7 @@ exports.apply = (ctx, config = {}) => {
   const quiz = new QuizSystem(memoryDir, logger)
   const brewing = new BrewingSystem(memoryDir, logger)
   const shop = new ShopSystem(memoryDir, logger)
+  const dynamicShop = new DynamicShopSystem(memoryDir, logger)
   const commission = new CommissionSystem(memoryDir, logger, affinity, {
     getCommissionBonus(userId) {
       return shop.getEquippedBonus(userId, 'commission_bonus')
@@ -791,6 +793,8 @@ exports.apply = (ctx, config = {}) => {
           weightBias: -2,
           items: [
             [formatHelpItem('酒狐商店', '商店', freeCommands), '浏览商品'],
+            ['酒狐动态商店', '今日特供（轮换折扣）'],
+            ['酒狐动态购买 <物品>', '从今日特供购买（每日限购）'],
             [formatHelpItem('酒狐购买 <物品>', '购买', freeCommands), '购买物品'],
             ['酒狐背包', '查看背包'],
             ['酒狐装备 <物品>', '装备物品'],
@@ -1775,6 +1779,89 @@ exports.apply = (ctx, config = {}) => {
         render: () => renderShopCard(ctx, { data: shopData }),
         fallbackMessage: '酒狐悄悄话: 商店卡片生成失败了，请稍后再试一次...',
       })
+    })
+
+  ctx.command('酒狐动态商店', '查看今日动态商店（轮换特供）')
+    .action(({ session }) => {
+      const gate = checkLevelGate(session, '商店')
+      if (gate) return gate
+      const status = affinity.getStatus(session.userId)
+      const today = require('./lib/utils').getTodayKey()
+      const deals = dynamicShop.getDeals(today)
+      const purchased = dynamicShop.getPurchasedSnapshot(session.userId, today)
+
+      if (!deals || deals.length === 0) {
+        return '酒狐悄悄话: 今日动态商店暂时不可用...稍后再试试？'
+      }
+
+      const typeLabel = (type) => (type === 'equip' ? '[装备]' : '[消耗]')
+
+      const lines = [
+        '== 酒狐动态商店（今日特供） ==',
+        '',
+        `日期: ${today}`,
+        `狐狐券余额: ${status.tickets} 张`,
+        '',
+        ...deals.flatMap((deal, index) => {
+          const lockedTag = status.level.level >= deal.levelRequired ? '' : ` [需Lv${deal.levelRequired}]`
+          const boughtTag = purchased[deal.itemId] ? ' （已购）' : ''
+          const priceLine = `特供价 ${deal.dealPrice}券（原价 ${deal.basePrice}券，-${deal.discountPct}%）`
+          const title = `${index + 1}. ${typeLabel(deal.type)} ${deal.name}${lockedTag}${boughtTag}`
+          const desc = deal.description ? `  ${deal.description}` : ''
+          return [title, `  ${priceLine}`, desc].filter(Boolean)
+        }),
+        '',
+        '购买：',
+        '- 酒狐动态购买 <物品名>',
+        '',
+        '提示：每个特供物品每日限购 1 次；折扣与轮换每天刷新。',
+      ]
+
+      return lines.join('\n')
+    })
+
+  ctx.command('酒狐动态购买 <item:text>', '从今日动态商店购买（每项每日限购 1 次）')
+    .action(async ({ session }, item) => {
+      if (!item || !item.trim()) return '酒狐悄悄话: 请输入要购买的物品名，例如：酒狐动态购买 围巾'
+      const status = affinity.getStatus(session.userId)
+      const today = require('./lib/utils').getTodayKey()
+      const deals = dynamicShop.getDeals(today)
+      const trimmed = item.trim()
+      const deal = deals.find(d => d.name === trimmed)
+
+      if (!deal) {
+        const names = deals.map(d => d.name).filter(Boolean).slice(0, 8)
+        return [
+          `酒狐悄悄话: 今日特供里没有「${trimmed}」哦。`,
+          '',
+          '先用「酒狐动态商店」看看今日有哪些特供吧~',
+          names.length > 0 ? `（今日特供示例：${names.join(' / ')}）` : '',
+        ].filter(Boolean).join('\n')
+      }
+
+      if (dynamicShop.hasPurchased(session.userId, today, deal.itemId)) {
+        return `酒狐悄悄话: 「${deal.name}」你今天已经在特供里买过一次啦（每日限购 1 次）。`
+      }
+
+      const result = shop.buyItem(session.userId, deal.name, status.level.level)
+      if (!result.success) return result.message
+
+      const cost = Number(deal.dealPrice || 0) || result.cost
+      const spend = await affinity.spendTickets(session.userId, cost)
+      if (!spend.success) {
+        return `酒狐悄悄话: 狐狐券不够呢...需要 ${cost} 张（特供价），主人当前只有 ${spend.newTickets} 张。`
+      }
+
+      await shop.confirmBuy(session.userId, result)
+      await dynamicShop.markPurchased(session.userId, today, deal.itemId)
+
+      const base = Number(deal.basePrice || result.cost) || result.cost
+      const discountText = base > 0 ? `（原价 ${base}，特供 ${cost}，-${deal.discountPct}%）` : ''
+
+      return [
+        `酒狐悄悄话: 今日特供购买成功！${discountText}`,
+        result.message,
+      ].filter(Boolean).join('\n')
     })
 
   // ===== 酒狐购买 =====

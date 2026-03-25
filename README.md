@@ -177,6 +177,8 @@ WineFox 侧已声明 `puppeteer` 为可选注入服务；宿主若未启用 Pupp
 | 指令 | 说明 |
 | --- | --- |
 | `酒狐商店` | 浏览商品（按等级展示梯度） |
+| `酒狐动态商店` | 查看今日动态商店（轮换特供/折扣） |
+| `酒狐动态购买 <物品>` | 从今日特供购买（每项每日限购 1 次） |
 | `酒狐购买 <物品>` | 使用狐狐券购买 |
 | `酒狐背包` | 查看背包 |
 | `酒狐装备 <物品>` | 装备道具 |
@@ -380,6 +382,7 @@ WineFox 会在插件目录下创建备份目录：
 - `memory/quiz.json`（问答）
 - `memory/achievements.json`（成就）
 - `memory/ticket-reward-ledger.json`（狐狐券领取次数账本）
+- `memory/dynamic-shop.json`（动态商店每日限购记录）
 - `memory/pending_submissions.json`（投稿队列）
 - `memory/prefs.json`（个人/群偏好）
 
