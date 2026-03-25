@@ -37,6 +37,7 @@ const {
   resolveCardTheme,
   setCardTheme,
   getActiveCardThemeInfo,
+  withCardTheme,
   renderCommissionCard,
   renderFavoritesCard,
   renderSearchResultCard,
@@ -70,6 +71,7 @@ const {
   renderGuessNumberResultCard,
   renderDailyQuoteCard,
   renderOmikujiCard,
+  renderDiagnosticsCard,
 } = require('./lib/card-renderer')
 
 // v2 模块
@@ -93,6 +95,9 @@ const CommissionSystem = require('./lib/commission')
 const dailyFree = require('./lib/daily-free')
 const UIThemeSystem = require('./lib/ui-theme')
 const TicketRewardLedger = require('./lib/ticket-reward-ledger')
+const { createAsyncLimiter } = require('./lib/async-limiter')
+const PrefsSystem = require('./lib/prefs')
+const RenderCache = require('./lib/render-cache')
 
 exports.name = 'WineFox-Daily'
 exports.inject = {
@@ -116,6 +121,7 @@ exports.Config = Schema.object({
   passiveCooldown: Schema.number().default(600000).description('群聊被动触发冷却时间（毫秒）'),
   rareDropChance: Schema.number().min(0).max(1).default(0.05).description('稀有语录掉落概率 (0~1)'),
   dailyAffinityMax: Schema.number().default(50).description('每日好感度获取上限'),
+  ioDebounceMs: Schema.number().min(0).default(0).description('高频存档写入防抖（毫秒，0=关闭；目前主要用于历史记录类文件）'),
   // === 图片输出 ===
   imageFortune: Schema.boolean().default(true).description('是否为酒狐占卜优先输出图片卡片'),
   imageAffinity: Schema.boolean().default(true).description('是否为酒狐好感优先输出图片卡片'),
@@ -151,6 +157,11 @@ exports.Config = Schema.object({
   imageBrewResult: Schema.boolean().default(true).description('是否为酒狐酿酒成功优先输出结果卡片'),
   imageOpenBottleResult: Schema.boolean().default(true).description('是否为酒狐开瓶成功优先输出结果卡片'),
   imageFallbackToText: Schema.boolean().default(true).description('图片渲染失败时是否自动回退为文字输出'),
+  imageRenderMaxConcurrency: Schema.number().min(0).default(0).description('图片渲染并发上限（0=不限制；高并发机器建议按 puppeteer renderPoolSize 设置）'),
+  imageRenderQueueTimeout: Schema.number().default(10000).description('图片渲染排队等待超时（毫秒，仅在开启并发上限时生效）'),
+  imageCacheEnabled: Schema.boolean().default(false).description('是否启用图片渲染缓存（帮助/分类/总数等低变化卡片可提升速度）'),
+  imageCacheMaxEntries: Schema.number().min(10).default(120).description('图片渲染缓存最大条目数'),
+  imageCacheDefaultTtlMs: Schema.number().min(1000).default(60000).description('图片渲染缓存默认 TTL（毫秒）'),
   seasonCycleHours: Schema.number().min(1).max(168).default(24).description('季节轮换周期（小时），按循环制切换，不按现实月份。'),
   seasonQuoteChance: Schema.number().min(0).max(1).default(0.35).description('主语录触发当前季节偏向语录的概率 (0~1)'),
   // === 心情 ===
@@ -181,6 +192,16 @@ exports.Config = Schema.object({
 
 exports.apply = (ctx, config = {}) => {
   const logger = ctx.logger('fox')
+  let imageRenderLimiter = null
+  let renderCache = null
+  let prefs = null
+  let pluginVersion = 'unknown'
+  try {
+    const pkg = require('./package.json')
+    if (pkg?.version) pluginVersion = String(pkg.version)
+  } catch {
+    // ignore
+  }
 
   function logImageCheck(feature, options = {}) {
     const parts = Object.entries(options).map(([key, value]) => `${key}=${value}`)
@@ -197,23 +218,31 @@ exports.apply = (ctx, config = {}) => {
       imageKey,
       imageEnabled,
       textOutput,
+      session,
       render,
       fallbackMessage,
       detail = '',
       extraChecks = [],
+      cacheKey = '',
+      cacheTtlMs = 0,
     } = options
 
     const puppeteerAvailable = hasPuppeteer(ctx)
-    const currentTheme = getActiveCardThemeInfo()
-    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: currentTheme.id }
+    const globalTheme = getActiveCardThemeInfo()
+    const resolvedThemeId = prefs ? prefs.resolveThemeId(session, globalTheme.id) : globalTheme.id
+    const forceText = prefs ? prefs.resolveForceText(session) : false
+    const effectiveImageEnabled = !!imageEnabled && !forceText
+
+    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: resolvedThemeId, forceText }
     for (const check of extraChecks) {
       checkOptions[check.key] = check.value
     }
     if (detail) checkOptions.detail = detail
     logImageCheck(feature, checkOptions)
 
-    if (!imageEnabled) {
-      logger.info(`[fox] ${feature}回退文字输出 reason=${imageKey}_disabled${formatLogDetail(detail)}`)
+    if (!effectiveImageEnabled) {
+      const reason = forceText ? 'force_text' : `${imageKey}_disabled`
+      logger.info(`[fox] ${feature}回退文字输出 reason=${reason}${formatLogDetail(detail)}`)
       return textOutput
     }
 
@@ -229,13 +258,34 @@ exports.apply = (ctx, config = {}) => {
     }
 
     try {
+      const cacheEnabled = !!renderCache?.enabled
+      const finalCacheKey = cacheEnabled && cacheKey
+        ? `${feature}:${resolvedThemeId}:${cacheKey}`
+        : ''
+
+      if (finalCacheKey) {
+        const hit = renderCache.get(finalCacheKey)
+        if (hit.hit) {
+          logger.info(`[fox] ${feature}命中图片缓存${formatLogDetail(detail)}`)
+          return hit.value
+        }
+      }
+
       logger.info(`[fox] ${feature}开始图片渲染${formatLogDetail(detail)}`)
-      const rendered = await render()
+      const renderTask = () => withCardTheme(resolvedThemeId, render)
+      const rendered = imageRenderLimiter
+        ? await imageRenderLimiter.run(renderTask, finalConfig.imageRenderQueueTimeout)
+        : await renderTask()
+      if (finalCacheKey) {
+        const ttl = cacheTtlMs || finalConfig.imageCacheDefaultTtlMs
+        renderCache.set(finalCacheKey, rendered, ttl)
+      }
       logger.info(`[fox] ${feature}图片渲染成功${formatLogDetail(detail)}`)
       return rendered
     } catch (err) {
-      logger.warn(`[fox] ${feature}图片渲染失败`, err)
-      logger.info(`[fox] ${feature}回退文字输出 reason=render_failed${formatLogDetail(detail)}`)
+      const reason = err?.code === 'QUEUE_TIMEOUT' ? 'queue_timeout' : 'render_failed'
+      logger.warn(`[fox] ${feature}图片渲染失败 reason=${reason}`, err)
+      logger.info(`[fox] ${feature}回退文字输出 reason=${reason}${formatLogDetail(detail)}`)
       if (finalConfig.imageFallbackToText) return textOutput
       return fallbackMessage
     }
@@ -265,22 +315,75 @@ exports.apply = (ctx, config = {}) => {
   const runtimeConfigJsonPath = path.join(__dirname, 'runtime_config.json')
 
   let runtimeConfig = {}
+  let runtimeConfigSource = 'none'
   try {
     if (fs.existsSync(runtimeConfigJsPath)) {
       delete require.cache[require.resolve(runtimeConfigJsPath)]
       runtimeConfig = require(runtimeConfigJsPath)
       logger.info('[fox] 已加载 runtime_config.js')
+      runtimeConfigSource = 'runtime_config.js'
     } else if (fs.existsSync(runtimeConfigJsonPath)) {
       runtimeConfig = JSON.parse(fs.readFileSync(runtimeConfigJsonPath, 'utf8'))
       logger.info('[fox] 已加载 runtime_config.json')
+      runtimeConfigSource = 'runtime_config.json'
     }
   } catch (err) {
     logger.warn('[fox] 读取运行时配置失败', err)
+    runtimeConfigSource = 'error'
   }
 
   const finalConfig = Object.assign({}, config, runtimeConfig)
+  imageRenderLimiter = createAsyncLimiter(finalConfig.imageRenderMaxConcurrency, { timeoutMs: finalConfig.imageRenderQueueTimeout })
+  renderCache = new RenderCache({
+    enabled: !!finalConfig.imageCacheEnabled,
+    maxEntries: finalConfig.imageCacheMaxEntries,
+    defaultTtlMs: finalConfig.imageCacheDefaultTtlMs,
+  })
 
   logger.info(`[fox] Puppeteer 服务可用: ${hasPuppeteer(ctx)}`)
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0B'
+    if (bytes < 1024) return `${bytes}B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+    return `${(bytes / 1024 / 1024).toFixed(2)}MB`
+  }
+
+  function hashText(input) {
+    const source = String(input || '')
+    let hash = 2166136261
+    for (let i = 0; i < source.length; i++) {
+      hash ^= source.charCodeAt(i)
+      hash = Math.imul(hash, 16777619) >>> 0
+    }
+    return hash.toString(16)
+  }
+
+  function hashJson(value) {
+    try {
+      return hashText(JSON.stringify(value))
+    } catch {
+      return hashText(String(value))
+    }
+  }
+
+  function inspectJsonFile(filePath, parseLimitBytes = 2 * 1024 * 1024) {
+    try {
+      if (!fs.existsSync(filePath)) return { exists: false, ok: null, bytes: 0, error: null }
+      const stat = fs.statSync(filePath)
+      const bytes = stat.size
+      if (bytes > parseLimitBytes) {
+        return { exists: true, ok: null, bytes, error: null }
+      }
+      const raw = fs.readFileSync(filePath, 'utf-8')
+      JSON.parse(raw)
+      return { exists: true, ok: true, bytes, error: null }
+    } catch (error) {
+      let bytes = 0
+      try { bytes = fs.statSync(filePath).size } catch { /* ignore */ }
+      return { exists: true, ok: false, bytes, error: error?.message || String(error) }
+    }
+  }
 
   ctx.middleware((session, next) => {
     const content = (session.content || '').trim()
@@ -300,16 +403,18 @@ exports.apply = (ctx, config = {}) => {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
   if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true })
 
+  prefs = new PrefsSystem(memoryDir, logger)
+
   // ===== 初始化各子系统 =====
   const quotesLoader = new QuotesLoader([quotesPath, quotesExtraPath, quotesExtraLovePath, quotesExtraFunPath, quotesExtraDarkPath, quotesExtraThemedPath], logger)
   const affinity = new AffinitySystem(memoryDir, logger, { dailyAffinityMax: finalConfig.dailyAffinityMax })
-  const daily = new DailyQuote(memoryDir, logger)
+  const daily = new DailyQuote(memoryDir, logger, { ioDebounceMs: finalConfig.ioDebounceMs })
   const festival = new FestivalSystem()
   const submission = new SubmissionSystem(memoryDir, logger)
   const fortune = new FortuneSystem()
   const mood = new MoodSystem({ enableMoodDecorate: finalConfig.enableMoodDecorate, moodDecorateChance: finalConfig.moodDecorateChance })
   const games = new GamesSystem(logger, { rpsWinBonus: finalConfig.rpsWinBonus, guessMaxAttempts: finalConfig.guessMaxAttempts, guessRange: finalConfig.guessRange })
-  const story = new StorySystem(dataDir, memoryDir, logger)
+  const story = new StorySystem(dataDir, memoryDir, logger, { ioDebounceMs: finalConfig.ioDebounceMs })
   const achievements = new AchievementSystem(memoryDir, logger)
   const weather = new WeatherSystem()
   const season = new SeasonSystem(memoryDir, logger, { cycleHours: finalConfig.seasonCycleHours })
@@ -472,8 +577,14 @@ exports.apply = (ctx, config = {}) => {
     getPassiveChanceBonus(userId) {
       return shop.getEquippedBonus(userId, 'passive_chance_bonus')
     },
+    isPassiveKeywordAllowed(session) {
+      if (!prefs) return true
+      const guildEnabled = prefs.resolvePassiveKeywordEnabled(session, finalConfig.enablePassiveKeyword)
+      const userAllowed = prefs.isUserAllowedToTriggerPassiveKeyword(session)
+      return guildEnabled && userAllowed
+    },
   })
-  registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, finalConfig, logger })
+  registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, renderImageFeature, finalConfig, logger })
   registerSearchCommands(ctx, quotesLoader, {
     renderImageFeature,
     renderSearchResultCard,
@@ -685,7 +796,7 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐帮助 =====
   ctx.command('酒狐帮助', '查看酒狐所有可用指令')
-    .action(async () => {
+    .action(async ({ session }) => {
       const helpData = getHelpData()
       const textOutput = [
         `== ${helpData.title} ==`,
@@ -703,6 +814,9 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageHelp',
         imageEnabled: finalConfig.imageHelp,
         textOutput,
+        session,
+        cacheKey: `help:${hashJson(helpData)}`,
+        cacheTtlMs: 60000,
         render: () => renderHelpCard(ctx, { data: helpData }),
         fallbackMessage: '酒狐悄悄话: 帮助菜单卡片生成失败了，请稍后再试一次...',
       })
@@ -818,6 +932,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageDailyQuote',
         imageEnabled: finalConfig.imageDailyQuote,
         textOutput,
+        session,
         render: () => renderDailyQuoteCard(ctx, {
           data: {
             seasonId: seasonData.id,
@@ -847,6 +962,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageAffinity',
         imageEnabled: finalConfig.imageAffinity,
         textOutput,
+        session,
         render: () => renderAffinityCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           status,
@@ -870,6 +986,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageRareCollection',
         imageEnabled: finalConfig.imageRareCollection,
         textOutput,
+        session,
         render: () => renderRareCollectionCard(ctx, { data: rareData }),
         fallbackMessage: '酒狐悄悄话: 图鉴卡片生成失败了，请稍后再试一次...',
       })
@@ -911,15 +1028,16 @@ exports.apply = (ctx, config = {}) => {
         const foxLines = responseData.actionResultQuotesCheckin || ['今天也辛苦啦。']
         const foxLine = require('./lib/utils').randomPick(foxLines)
 
-        return renderImageFeature({
-          feature: '酒狐签到结果',
-          imageKey: 'imageCheckinResult',
-          imageEnabled: finalConfig.imageCheckinResult,
-          textOutput,
-          render: () => renderCheckinResultCard(ctx, {
-            data: {
-              tag: '今日奖励',
-              mainRows: [
+	        return renderImageFeature({
+	          feature: '酒狐签到结果',
+	          imageKey: 'imageCheckinResult',
+	          imageEnabled: finalConfig.imageCheckinResult,
+	          textOutput,
+	          session,
+	          render: () => renderCheckinResultCard(ctx, {
+	            data: {
+	              tag: '今日奖励',
+	              mainRows: [
                 { label: '好感', value: `+${result.reward}`, muted: `连续 ${userData.streak} 天 · 累计 ${userData.totalDays} 天` },
                 { label: '狐狐券', value: `+${finalTicketReward}`, muted: `当前余额 ${ticketResult.newTickets} 张` },
               ],
@@ -944,6 +1062,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageCheckinCalendar',
         imageEnabled: finalConfig.imageCheckinCalendar,
         textOutput,
+        session,
         render: () => renderCheckinCalendarCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           data: calendarData,
@@ -971,6 +1090,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageFortune',
         imageEnabled: finalConfig.imageFortune,
         textOutput,
+        session,
         render: () => renderFortuneCard(ctx, {
           userName: session.username || session.author?.name || session.userId,
           data: {
@@ -988,7 +1108,7 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐心情 =====
   ctx.command('酒狐心情', '查看酒狐当前心情')
-    .action(async () => {
+    .action(async ({ session }) => {
       const seasonData = season.getSeason()
       const moodInfo = mood.getMood({ season: seasonData })
       const textOutput = mood.getStatusText({ season: seasonData })
@@ -998,6 +1118,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageMood',
         imageEnabled: finalConfig.imageMood,
         textOutput,
+        session,
         render: () => renderMoodCard(ctx, {
           data: {
             title: '酒狐心情',
@@ -1041,15 +1162,16 @@ exports.apply = (ctx, config = {}) => {
 
         const progressLine = progressDelta > 0 ? affinity.formatProgressLine(session.userId, progressDelta) : ''
         const textOutput = result.message + ticketLine + (progressLine ? `\n${progressLine}` : '')
-        return renderImageFeature({
-          feature: '酒狐猜拳胜利结果',
-          imageKey: 'imageRpsWinResult',
-          imageEnabled: finalConfig.imageRpsWinResult,
-          textOutput,
-          detail: `userChoice=${result.userChoiceName} foxChoice=${result.foxChoiceName}`,
-          render: () => renderRpsWinResultCard(ctx, {
-            data: {
-              userChoiceName: result.userChoiceName,
+	        return renderImageFeature({
+	          feature: '酒狐猜拳胜利结果',
+	          imageKey: 'imageRpsWinResult',
+	          imageEnabled: finalConfig.imageRpsWinResult,
+	          textOutput,
+	          session,
+	          detail: `userChoice=${result.userChoiceName} foxChoice=${result.foxChoiceName}`,
+	          render: () => renderRpsWinResultCard(ctx, {
+	            data: {
+	              userChoiceName: result.userChoiceName,
               foxChoiceName: result.foxChoiceName,
               flavorLine: result.flavorLine,
               ticketReward: ticketGrant.granted,
@@ -1091,15 +1213,16 @@ exports.apply = (ctx, config = {}) => {
           ? `\n狐狐券 +${ticketGrant.granted} (当前 ${ticketGrant.newTickets} 张)`
           : `\n（今日猜数奖励已领满，当前 ${ticketGrant.newTickets} 张）`
         const textOutput = result.message + ticketLine + (progressLine ? `\n${progressLine}` : '') + buildAffinityCapNote(affinityResult)
-        return renderImageFeature({
-          feature: '酒狐猜数结算',
-          imageKey: 'imageGuessResult',
-          imageEnabled: finalConfig.imageGuessResult,
-          textOutput,
-          detail: `answer=${result.answer || ''} attempts=${result.attempts || 0}`,
-          render: () => renderGuessNumberResultCard(ctx, {
-            data: {
-              success: true,
+	        return renderImageFeature({
+	          feature: '酒狐猜数结算',
+	          imageKey: 'imageGuessResult',
+	          imageEnabled: finalConfig.imageGuessResult,
+	          textOutput,
+	          session,
+	          detail: `answer=${result.answer || ''} attempts=${result.attempts || 0}`,
+	          render: () => renderGuessNumberResultCard(ctx, {
+	            data: {
+	              success: true,
               answer: result.answer,
               attempts: result.attempts,
               summary: result.summary || result.message,
@@ -1116,16 +1239,17 @@ exports.apply = (ctx, config = {}) => {
         if (result.affinityBonus > 0) {
           affinityResult = await affinity.addPoints(session.userId, result.affinityBonus)
         }
-        return renderImageFeature({
-          feature: '酒狐猜数结算',
-          imageKey: 'imageGuessResult',
-          imageEnabled: finalConfig.imageGuessResult,
-          textOutput: result.affinityBonus > 0
-            ? `${result.message}${(affinityResult.actualAdded || 0) > 0 ? `\n${affinity.formatProgressLine(session.userId, affinityResult.actualAdded)}` : ''}${buildAffinityCapNote(affinityResult)}`
-            : result.message,
-          detail: `answer=${result.answer || ''} attempts=${result.attempts || 0}`,
-          render: () => renderGuessNumberResultCard(ctx, {
-            data: {
+	        return renderImageFeature({
+	          feature: '酒狐猜数结算',
+	          imageKey: 'imageGuessResult',
+	          imageEnabled: finalConfig.imageGuessResult,
+	          session,
+	          textOutput: result.affinityBonus > 0
+	            ? `${result.message}${(affinityResult.actualAdded || 0) > 0 ? `\n${affinity.formatProgressLine(session.userId, affinityResult.actualAdded)}` : ''}${buildAffinityCapNote(affinityResult)}`
+	            : result.message,
+	          detail: `answer=${result.answer || ''} attempts=${result.attempts || 0}`,
+	          render: () => renderGuessNumberResultCard(ctx, {
+	            data: {
               success: false,
               answer: result.answer,
               attempts: result.attempts,
@@ -1163,6 +1287,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageOmikuji',
         imageEnabled: finalConfig.imageOmikuji,
         textOutput,
+        session,
         render: () => renderOmikujiCard(ctx, {
           data: {
             rank: omikuji.rank,
@@ -1202,6 +1327,7 @@ exports.apply = (ctx, config = {}) => {
           imageKey: 'imageStory',
           imageEnabled: finalConfig.imageStory,
           textOutput,
+          session,
           detail: `mode=category category=${catName}`,
           extraChecks: [
             { key: 'hasStoryData', value: !!storyData, ok: !!storyData, reason: 'missing_story_data' },
@@ -1220,6 +1346,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageStory',
         imageEnabled: finalConfig.imageStory,
         textOutput,
+        session,
         detail: 'mode=random',
         extraChecks: [
           { key: 'hasStoryData', value: !!storyData, ok: !!storyData, reason: 'missing_story_data' },
@@ -1231,7 +1358,7 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐故事目录 =====
   ctx.command('酒狐故事目录', '查看故事分类列表')
-    .action(async () => {
+    .action(async ({ session }) => {
       const catalogData = story.getCatalogData()
       const textOutput = story.getCategoryList()
 
@@ -1240,6 +1367,9 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageStoryCatalog',
         imageEnabled: finalConfig.imageStoryCatalog,
         textOutput,
+        session,
+        cacheKey: `storyCatalog:${hashJson(catalogData)}`,
+        cacheTtlMs: 300000,
         extraChecks: [
           { key: 'hasCatalogData', value: !!catalogData, ok: !!catalogData, reason: 'missing_catalog_data' },
         ],
@@ -1338,6 +1468,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageGuessResult',
         imageEnabled: finalConfig.imageGuessResult,
         textOutput,
+        session,
         detail: `answer=${result.answer || ''} attempts=${result.attempts || 0}`,
         render: () => renderGuessNumberResultCard(ctx, {
           data: {
@@ -1362,6 +1493,7 @@ exports.apply = (ctx, config = {}) => {
         feature: '酒狐猜数结算',
         imageKey: 'imageGuessResult',
         imageEnabled: finalConfig.imageGuessResult,
+        session,
         textOutput: result.affinityBonus > 0
           ? `${result.message}${(affinityResult.actualAdded || 0) > 0 ? `\n${affinity.formatProgressLine(session.userId, affinityResult.actualAdded)}` : ''}${buildAffinityCapNote(affinityResult)}`
           : result.message,
@@ -1407,6 +1539,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageBrewResult',
         imageEnabled: finalConfig.imageBrewResult,
         textOutput,
+        session,
         render: () => renderBrewResultCard(ctx, {
           data: brewing.getBrewResultCardData(result),
         }),
@@ -1423,6 +1556,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageCellar',
         imageEnabled: finalConfig.imageCellar,
         textOutput,
+        session,
         render: () => renderCellarCard(ctx, {
           data: brewing.getCellarCardData(session.userId),
         }),
@@ -1444,15 +1578,16 @@ exports.apply = (ctx, config = {}) => {
         if (result.quality === '传说') await trackAndNotify(session, 'brew_legendary')
         mood.onEvent('tipsy')
         const textOutput = result.message + `\n狐狐券 +${ticketReward} (当前 ${ticketResult.newTickets} 张)\n${affinity.formatProgressLine(session.userId, result.reward)}`
-        return renderImageFeature({
-          feature: '酒狐开瓶结果',
-          imageKey: 'imageOpenBottleResult',
-          imageEnabled: finalConfig.imageOpenBottleResult,
-          textOutput,
-          render: () => renderOpenBottleResultCard(ctx, {
-            data: {
-              ...brewing.getOpenBottleResultCardData(result),
-              ticketReward,
+	        return renderImageFeature({
+	          feature: '酒狐开瓶结果',
+	          imageKey: 'imageOpenBottleResult',
+	          imageEnabled: finalConfig.imageOpenBottleResult,
+	          textOutput,
+	          session,
+	          render: () => renderOpenBottleResultCard(ctx, {
+	            data: {
+	              ...brewing.getOpenBottleResultCardData(result),
+	              ticketReward,
               ticketBalance: ticketResult.newTickets,
             },
           }),
@@ -1480,6 +1615,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageShop',
         imageEnabled: finalConfig.imageShop,
         textOutput,
+        session,
         render: () => renderShopCard(ctx, { data: shopData }),
         fallbackMessage: '酒狐悄悄话: 商店卡片生成失败了，请稍后再试一次...',
       })
@@ -1515,6 +1651,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageBuyResult',
         imageEnabled: finalConfig.imageBuyResult,
         textOutput,
+        session,
         detail: `item=${itemName}`,
         render: () => renderBuyResultCard(ctx, {
           data: {
@@ -1544,6 +1681,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageInventory',
         imageEnabled: finalConfig.imageInventory,
         textOutput,
+        session,
         render: () => renderInventoryCard(ctx, { data: inventoryData }),
         fallbackMessage: '酒狐悄悄话: 背包卡片生成失败了，请稍后再试一次...',
       })
@@ -1562,6 +1700,7 @@ exports.apply = (ctx, config = {}) => {
         feature: '酒狐装备结果',
         imageKey: 'imageEquipResult',
         imageEnabled: finalConfig.imageEquipResult,
+        session,
         textOutput: result.message,
         detail: `item=${item.trim()}`,
         render: () => renderEquipResultCard(ctx, {
@@ -1674,6 +1813,7 @@ exports.apply = (ctx, config = {}) => {
         feature: '酒狐使用结果',
         imageKey: 'imageUseResult',
         imageEnabled: finalConfig.imageUseResult,
+        session,
         textOutput: finalMessage,
         detail: `item=${item.trim()}`,
         render: () => renderUseResultCard(ctx, {
@@ -1699,6 +1839,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageMemoir',
         imageEnabled: finalConfig.imageMemoir,
         textOutput,
+        session,
         extraChecks: [
           { key: 'hasMemoirData', value: !!memoirData, ok: !!memoirData, reason: 'missing_memoir_data' },
         ],
@@ -1721,6 +1862,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageAchievement',
         imageEnabled: finalConfig.imageAchievement,
         textOutput,
+        session,
         render: () => renderAchievementCard(ctx, { data: achievementData }),
         fallbackMessage: '酒狐悄悄话: 成就卡片生成失败了，请稍后再试一次...',
       })
@@ -1728,7 +1870,7 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐排行 =====
   ctx.command('酒狐排行', '好感度排行榜 Top10')
-    .action(async () => {
+    .action(async ({ session }) => {
       const rankingData = getRankingData()
       const textOutput = rankingData.isEmpty
         ? '还没有人和酒狐互动过呢...'
@@ -1742,6 +1884,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageRanking',
         imageEnabled: finalConfig.imageRanking,
         textOutput,
+        session,
         render: () => renderRankingCard(ctx, { data: rankingData }),
         fallbackMessage: '酒狐悄悄话: 排行卡片生成失败了，请稍后再试一次...',
       })
@@ -1785,6 +1928,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageGiftResult',
         imageEnabled: finalConfig.imageGiftResult,
         textOutput,
+        session,
         detail: `target=${targetId}`,
         render: () => renderGiftResultCard(ctx, {
           data: {
@@ -1824,6 +1968,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageFavorites',
         imageEnabled: finalConfig.imageFavorites,
         textOutput,
+        session,
         detail: `page=${data.page}`,
         render: () => renderFavoritesCard(ctx, { data }),
         fallbackMessage: '酒狐悄悄话: 收藏夹卡片生成失败了，请稍后再试一次...',
@@ -1869,6 +2014,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageWeather',
         imageEnabled: finalConfig.imageWeather,
         textOutput,
+        session,
         render: () => renderWeatherCard(ctx, {
           data: {
             title: '酒狐天气',
@@ -1890,7 +2036,7 @@ exports.apply = (ctx, config = {}) => {
 
   // ===== 酒狐季节 =====
   ctx.command('酒狐季节', '查看当前循环季节')
-    .action(() => {
+    .action(({ session }) => {
       const seasonData = season.getSeason()
       const textOutput = season.getReport(seasonData)
 
@@ -1899,6 +2045,7 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageSeason',
         imageEnabled: finalConfig.imageSeason,
         textOutput,
+        session,
         render: () => renderSeasonCard(ctx, {
           data: {
             title: '酒狐季节',
@@ -2047,9 +2194,230 @@ exports.apply = (ctx, config = {}) => {
         imageKey: 'imageCommission',
         imageEnabled: finalConfig.imageCommission,
         textOutput,
+        session,
         render: () => renderCommissionCard(ctx, { data }),
         fallbackMessage: '酒狐悄悄话: 委托任务板卡片生成失败了，请稍后再试一次...',
       })
+    })
+
+  // ===== 酒狐偏好 / 群设置 =====
+  function parseToggleInput(value) {
+    const normalized = String(value || '').trim()
+    if (!normalized) return { kind: 'query' }
+
+    const onWords = new Set(['开', '开启', '启用', 'on', 'true', '1', 'yes', 'y'])
+    const offWords = new Set(['关', '关闭', '禁用', 'off', 'false', '0', 'no', 'n'])
+    const clearWords = new Set(['默认', '清除', '取消', 'reset', 'unset', 'none'])
+
+    if (onWords.has(normalized)) return { kind: 'set', value: true }
+    if (offWords.has(normalized)) return { kind: 'set', value: false }
+    if (clearWords.has(normalized)) return { kind: 'clear', value: null }
+    return { kind: 'invalid', value: normalized }
+  }
+
+  ctx.command('酒狐偏好', '查看个人偏好设置')
+    .action(({ session }) => {
+      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
+    })
+
+  ctx.command('酒狐偏好.文字 [value:text]', '强制文字输出（开/关/默认）')
+    .action(async ({ session }, value) => {
+      const parsed = parseToggleInput(value)
+      if (parsed.kind === 'query') {
+        return [
+          '== 酒狐偏好 · 文字 ==',
+          '',
+          '用法：',
+          '- 酒狐偏好 文字 开    # 强制文字（禁用图片）',
+          '- 酒狐偏好 文字 关    # 允许图片（按各指令配置）',
+          '- 酒狐偏好 文字 默认  # 清除个人设置，交给群/全局配置',
+        ].join('\n')
+      }
+      if (parsed.kind === 'invalid') {
+        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
+      }
+
+      const patch = parsed.kind === 'clear' ? { forceText: null } : { forceText: parsed.value }
+      await prefs.setUserPrefs(session, patch)
+      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
+    })
+
+  ctx.command('酒狐偏好.被动 [value:text]', '控制“我的发言触发被动冒泡”（开/关/默认）')
+    .action(async ({ session }, value) => {
+      const parsed = parseToggleInput(value)
+      if (parsed.kind === 'query') {
+        return [
+          '== 酒狐偏好 · 被动 ==',
+          '',
+          '说明：这里只控制“你的消息是否允许触发关键词被动冒泡”。',
+          '用法：',
+          '- 酒狐偏好 被动 开    # 允许你的消息触发（默认）',
+          '- 酒狐偏好 被动 关    # 禁用你的消息触发',
+          '- 酒狐偏好 被动 默认  # 清除个人设置',
+        ].join('\n')
+      }
+      if (parsed.kind === 'invalid') {
+        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
+      }
+
+      // disablePassiveKeywordTrigger: true = 不允许触发
+      const patch = parsed.kind === 'clear'
+        ? { disablePassiveKeywordTrigger: null }
+        : { disablePassiveKeywordTrigger: parsed.value ? false : true }
+      await prefs.setUserPrefs(session, patch)
+      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
+    })
+
+  ctx.command('酒狐偏好.主题 [theme:text]', '设置个人图片主题（会覆盖全局/群主题）')
+    .action(async ({ session }, theme) => {
+      const themes = listCardThemes()
+
+      if (!theme || !theme.trim()) {
+        const resolvedThemeId = prefs.resolveThemeId(session, getActiveCardThemeInfo().id)
+        const resolvedTheme = resolveCardTheme(resolvedThemeId) || getActiveCardThemeInfo()
+        const lines = [
+          '== 酒狐偏好 · 主题 ==',
+          '',
+          `当前生效主题: ${resolvedTheme.name} (${resolvedTheme.id})`,
+          '',
+          '可用主题:',
+          ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
+          '',
+          '用法：',
+          '- 酒狐偏好 主题 晴天玻璃',
+          '- 酒狐偏好 主题 cream-paper',
+          '- 酒狐偏好 主题 默认   # 清除个人主题，回退到群/全局主题',
+        ]
+        return lines.join('\n')
+      }
+
+      const parsed = parseToggleInput(theme)
+      if (parsed.kind === 'clear') {
+        await prefs.setUserPrefs(session, { themeId: null })
+        return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
+      }
+
+      const resolvedTheme = resolveCardTheme(theme)
+      if (!resolvedTheme) {
+        return [
+          `酒狐悄悄话: 没找到「${theme.trim()}」这个主题哦。`,
+          '',
+          '可用主题:',
+          ...themes.map(item => `- ${item.name} (${item.id})`),
+        ].join('\n')
+      }
+
+      await prefs.setUserPrefs(session, { themeId: resolvedTheme.id })
+      return `酒狐悄悄话: 已将你的个人主题设置为「${resolvedTheme.name}」(${resolvedTheme.id})。\n（可用「酒狐偏好」查看当前生效设置）`
+    })
+
+  ctx.command('酒狐群设置', '查看本群酒狐设置（仅管理员）', { authority: 3 })
+    .action(({ session }) => {
+      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中查看群设置哦。'
+      const guildPrefs = prefs.getGuildPrefs(session)
+      const globalTheme = getActiveCardThemeInfo()
+      const guildTheme = guildPrefs.themeId ? resolveCardTheme(guildPrefs.themeId) : null
+      const effectiveTheme = guildTheme || globalTheme
+
+      return [
+        '== 酒狐群设置 ==',
+        '',
+        `全局主题: ${globalTheme.name} (${globalTheme.id})`,
+        `群主题: ${guildTheme ? `${guildTheme.name} (${guildTheme.id})` : '(未设置)'}`,
+        `本群生效主题: ${effectiveTheme.name} (${effectiveTheme.id})`,
+        '',
+        `群文字强制: ${guildPrefs.forceText === undefined ? '(未设置)' : String(guildPrefs.forceText)}`,
+        `群被动冒泡: ${guildPrefs.passiveKeywordEnabled === undefined ? '(未设置)' : String(guildPrefs.passiveKeywordEnabled)}`,
+        '',
+        '提示：个人偏好仍可覆盖群设置（优先级：个人 > 群 > 全局）。',
+      ].join('\n')
+    })
+
+  ctx.command('酒狐群设置.文字 [value:text]', '本群强制文字输出（开/关/默认）', { authority: 3 })
+    .action(async ({ session }, value) => {
+      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群偏好哦。'
+      const parsed = parseToggleInput(value)
+      if (parsed.kind === 'query') {
+        return [
+          '== 酒狐群设置 · 文字 ==',
+          '',
+          '用法：',
+          '- 酒狐群设置 文字 开    # 本群强制文字（禁用图片）',
+          '- 酒狐群设置 文字 关    # 本群允许图片（按各指令配置）',
+          '- 酒狐群设置 文字 默认  # 清除群设置，回退到全局配置',
+        ].join('\n')
+      }
+      if (parsed.kind === 'invalid') {
+        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
+      }
+      const patch = parsed.kind === 'clear' ? { forceText: null } : { forceText: parsed.value }
+      await prefs.setGuildPrefs(session, patch)
+      return '酒狐悄悄话: 本群文字/图片偏好已更新。\n（可用「酒狐群设置」查看当前设置）'
+    })
+
+  ctx.command('酒狐群设置.被动 [value:text]', '本群关键词被动冒泡（开/关/默认）', { authority: 3 })
+    .action(async ({ session }, value) => {
+      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群偏好哦。'
+      const parsed = parseToggleInput(value)
+      if (parsed.kind === 'query') {
+        return [
+          '== 酒狐群设置 · 被动 ==',
+          '',
+          '用法：',
+          '- 酒狐群设置 被动 开    # 本群开启关键词被动冒泡',
+          '- 酒狐群设置 被动 关    # 本群关闭关键词被动冒泡',
+          '- 酒狐群设置 被动 默认  # 清除群设置，回退到全局配置',
+        ].join('\n')
+      }
+      if (parsed.kind === 'invalid') {
+        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
+      }
+      const patch = parsed.kind === 'clear' ? { passiveKeywordEnabled: null } : { passiveKeywordEnabled: parsed.value }
+      await prefs.setGuildPrefs(session, patch)
+      return '酒狐悄悄话: 本群被动冒泡开关已更新。\n（可用「酒狐群设置」查看当前设置）'
+    })
+
+  ctx.command('酒狐群设置.主题 [theme:text]', '设置本群图片主题（仅管理员）', { authority: 3 })
+    .action(async ({ session }, theme) => {
+      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群主题哦。'
+      const themes = listCardThemes()
+
+      if (!theme || !theme.trim()) {
+        const resolvedThemeId = prefs.resolveThemeId(session, getActiveCardThemeInfo().id)
+        const resolvedTheme = resolveCardTheme(resolvedThemeId) || getActiveCardThemeInfo()
+        const lines = [
+          '== 酒狐群设置 · 主题 ==',
+          '',
+          `当前生效主题: ${resolvedTheme.name} (${resolvedTheme.id})`,
+          '',
+          '可用主题:',
+          ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
+          '',
+          '用法：',
+          '- 酒狐群设置 主题 晨光咖啡馆',
+          '- 酒狐群设置 主题 默认   # 清除群主题，回退到全局主题',
+        ]
+        return lines.join('\n')
+      }
+
+      const parsed = parseToggleInput(theme)
+      if (parsed.kind === 'clear') {
+        await prefs.setGuildPrefs(session, { themeId: null })
+        return '酒狐悄悄话: 已清除本群主题设置，将回退到全局主题。'
+      }
+
+      const resolvedTheme = resolveCardTheme(theme)
+      if (!resolvedTheme) {
+        return [
+          `酒狐悄悄话: 没找到「${theme.trim()}」这个主题哦。`,
+          '',
+          '可用主题:',
+          ...themes.map(item => `- ${item.name} (${item.id})`),
+        ].join('\n')
+      }
+
+      await prefs.setGuildPrefs(session, { themeId: resolvedTheme.id })
+      return `酒狐悄悄话: 本群主题已设置为「${resolvedTheme.name}」(${resolvedTheme.id})。`
     })
 
   // ===== 酒狐UI =====
@@ -2069,6 +2437,7 @@ exports.apply = (ctx, config = {}) => {
           ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
           '',
           '使用「酒狐UI 主题名」切换，例如：酒狐UI 晴天玻璃',
+          '提示：你也可以用「酒狐偏好 主题」设置个人主题，或用「酒狐群设置 主题」设置群主题（优先级：个人 > 群 > 全局）。',
         ].filter(Boolean)
         return lines.join('\n')
       }
@@ -2120,5 +2489,136 @@ exports.apply = (ctx, config = {}) => {
       return ok ? `语录重载成功！共 ${quotesLoader.count} 条语录，${quotesLoader.categoryNames.length} 个分类。` : '语录重载失败。'
     })
 
-  logger.info(`[fox] 酒狐悄悄话增强版 v2.3 已启动 | 语录 ${quotesLoader.count} 条 | 故事 ${story.count} 篇`)
+  ctx.command('酒狐诊断', '查看酒狐运行状态与存档健康', { authority: 3 })
+    .option('image', '-i 输出图片卡片')
+    .action(async ({ options }) => {
+      const version = pluginVersion
+
+      const puppeteerAvailable = hasPuppeteer(ctx)
+      const theme = getActiveCardThemeInfo()
+      const limiterStatus = imageRenderLimiter?.getStatus?.() || { enabled: false }
+      const cacheStatus = renderCache?.getStatus?.() || { enabled: false }
+
+      const jsonFiles = [
+        ['好感度', path.join(memoryDir, 'affinity.json')],
+        ['背包', path.join(memoryDir, 'inventory.json')],
+        ['委托', path.join(memoryDir, 'commission.json')],
+        ['收藏', path.join(memoryDir, 'favorites.json')],
+        ['季节循环', path.join(memoryDir, 'season-cycle.json')],
+        ['主题配置', path.join(memoryDir, 'ui-theme.json')],
+        ['狐狐券账本', path.join(memoryDir, 'ticket-reward-ledger.json')],
+        ['签到', path.join(memoryDir, 'checkin.json')],
+        ['酿酒', path.join(memoryDir, 'brewing.json')],
+        ['问答', path.join(memoryDir, 'quiz.json')],
+        ['成就', path.join(memoryDir, 'achievements.json')],
+        ['每日酒狐', path.join(memoryDir, 'daily.json')],
+        ['近期历史', path.join(memoryDir, 'recent_history.json')],
+        ['投稿队列', path.join(memoryDir, 'pending_submissions.json')],
+        ['故事历史', path.join(memoryDir, 'story_history.json')],
+      ]
+
+      const fileStats = jsonFiles.map(([label, filePath]) => ({
+        label,
+        filePath,
+        ...inspectJsonFile(filePath),
+      }))
+
+      const okCount = fileStats.filter(item => item.exists && item.ok === true).length
+      const badCount = fileStats.filter(item => item.exists && item.ok === false).length
+      const skippedCount = fileStats.filter(item => item.exists && item.ok === null).length
+      const missingCount = fileStats.filter(item => !item.exists).length
+
+      const lines = [
+        '== 酒狐诊断 ==',
+        '',
+        `版本: ${version}`,
+        `Puppeteer: ${puppeteerAvailable ? '可用' : '不可用'}`,
+        `主题: ${theme.name} (${theme.id})`,
+        `运行时配置: ${runtimeConfigSource}`,
+        `渲染队列: ${limiterStatus.enabled ? `启用 max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued} timeout=${limiterStatus.defaultTimeoutMs}ms` : '未启用'}`,
+        `图片缓存: ${cacheStatus.enabled ? `启用 size=${cacheStatus.size}/${cacheStatus.maxEntries} hits=${cacheStatus.hits} misses=${cacheStatus.misses}` : '未启用'}`,
+        '',
+        `memoryDir: ${memoryDir}`,
+        `存档健康: OK ${okCount} / BAD ${badCount} / SKIP ${skippedCount} / MISSING ${missingCount}`,
+        '',
+        '存档详情:',
+        ...fileStats.map((item) => {
+          const status = item.exists
+            ? (item.ok === true ? 'OK' : (item.ok === false ? `BAD(${item.error})` : 'SKIP(过大未解析)'))
+            : 'MISSING'
+          return `- ${item.label}: ${status} ${formatBytes(item.bytes)}`
+        }),
+      ]
+
+      if (!options?.image || !puppeteerAvailable) return lines.join('\n')
+
+      const rows = [
+        ['版本', version],
+        ['Puppeteer', puppeteerAvailable ? '可用' : '不可用'],
+        ['主题', `${theme.name} (${theme.id})`],
+        ['运行时配置', runtimeConfigSource],
+        ['渲染队列', limiterStatus.enabled ? `max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued}` : '未启用'],
+        ['图片缓存', cacheStatus.enabled ? `size=${cacheStatus.size}/${cacheStatus.maxEntries}` : '未启用'],
+        ['存档健康', `OK ${okCount} / BAD ${badCount} / MISSING ${missingCount}`],
+      ]
+
+      const renderTask = () => renderDiagnosticsCard(ctx, {
+        data: {
+          title: '酒狐诊断',
+          subtitle: '运行状态摘要',
+          tip: '用于快速确认 Puppeteer/主题/存档状态。更详细信息请用文字版「酒狐诊断」。',
+          rows,
+          footerText: `WineFox-Daily v${version}`,
+        },
+      })
+
+      try {
+        return imageRenderLimiter
+          ? await imageRenderLimiter.run(renderTask, finalConfig.imageRenderQueueTimeout)
+          : await renderTask()
+      } catch (err) {
+        logger.warn('[fox] 酒狐诊断图片渲染失败，将回退文字输出', err)
+        return lines.join('\n')
+      }
+    })
+
+  ctx.command('酒狐渲染自检', '渲染一张最小诊断卡片（验证生图链路）', { authority: 3 })
+    .action(async () => {
+      if (!hasPuppeteer(ctx)) {
+        return [
+          '酒狐渲染自检：当前未启用 Puppeteer 服务。',
+          '请在 Koishi 中启用实现了 `puppeteer` 服务的插件（例如 @shangxueink/koishi-plugin-puppeteer-without-canvas）。',
+        ].join('\n')
+      }
+
+      const theme = getActiveCardThemeInfo()
+      const limiterStatus = imageRenderLimiter?.getStatus?.() || { enabled: false }
+
+      const rows = [
+        ['状态', '渲染链路 OK'],
+        ['主题', `${theme.name} (${theme.id})`],
+        ['渲染队列', limiterStatus.enabled ? `max=${limiterStatus.maxConcurrency} active=${limiterStatus.active} queued=${limiterStatus.queued}` : '未启用'],
+        ['时间', new Date().toISOString()],
+      ]
+
+      const renderTask = () => renderDiagnosticsCard(ctx, {
+        data: {
+          title: '酒狐渲染自检',
+          subtitle: '如果你能看到这张图，说明生图链路正常',
+          tip: '若卡片偶发空白/字体错乱，建议检查 Puppeteer 字体注入与 render pool 配置。',
+          rows,
+        },
+      })
+
+      try {
+        return imageRenderLimiter
+          ? await imageRenderLimiter.run(renderTask, finalConfig.imageRenderQueueTimeout)
+          : await renderTask()
+      } catch (err) {
+        logger.warn('[fox] 酒狐渲染自检失败', err)
+        return `酒狐渲染自检失败：${err?.message || String(err)}`
+      }
+    })
+
+  logger.info(`[fox] 酒狐悄悄话增强版 v${pluginVersion} 已启动 | 语录 ${quotesLoader.count} 条 | 故事 ${story.count} 篇`)
 }

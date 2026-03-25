@@ -50,6 +50,13 @@ module.exports = {
   // 默认: 50
   dailyAffinityMax: 50,
 
+  // 高频存档写入防抖（毫秒）
+  // 默认 0 表示不启用（保持现状）。
+  // 建议只在宿主磁盘/IO 压力较大时开启，例如 200~800ms。
+  // 目前主要用于“历史记录类文件”（例如最近抽取历史/故事历史）以减少高频写入。
+  // 默认: 0
+  ioDebounceMs: 0,
+
   // ==========================================
   //  图片卡片输出
   // ==========================================
@@ -90,6 +97,33 @@ module.exports = {
   imageBrewResult: true,
   imageOpenBottleResult: true,
   imageFallbackToText: true,
+
+  // 图片渲染并发控制（可选）
+  // 默认 0 表示不限制并发，保持现状。
+  // 如果你使用的是魔改版 puppeteer（支持 reusePage/renderPoolSize），并且群里高峰期渲染会偶发失败，
+  // 建议将本值设置为 <= puppeteer 的 renderPoolSize（例如 2~4），能显著提升稳定性。
+  // 默认: 0
+  imageRenderMaxConcurrency: 0,
+
+  // 图片渲染排队等待超时（毫秒）
+  // 仅在 imageRenderMaxConcurrency > 0 时生效。超过超时仍会按 imageFallbackToText 决定是否回退文字。
+  // 默认: 10000（10秒）
+  imageRenderQueueTimeout: 10000,
+
+  // 图片渲染缓存（可选）
+  // 默认关闭：避免缓存导致的“状态块”显示滞后（例如帮助卡里的季节/天气）。
+  // 如果你主要用图片卡输出、且群里高峰期频繁调用帮助/分类/总数等指令，
+  // 开启后可显著减少 Puppeteer 负载、提升响应速度。
+  imageCacheEnabled: false,
+
+  // 图片缓存最大条目数（超过会按 LRU 淘汰）
+  // 默认: 120
+  imageCacheMaxEntries: 120,
+
+  // 图片缓存默认 TTL（毫秒）
+  // 建议：帮助类 60s、分类/总数 10min；实际 TTL 由各指令传入，可用本值做兜底。
+  // 默认: 60000（1分钟）
+  imageCacheDefaultTtlMs: 60000,
 
   // ==========================================
   //  心情系统

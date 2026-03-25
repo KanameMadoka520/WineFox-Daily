@@ -4,7 +4,7 @@ const path = require('path')
 
 async function testPackageVersionUpdated() {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
-  assert.strictEqual(pkg.version, '2.3.0', 'package.json 版本号应更新到 2.3.0')
+  assert.strictEqual(pkg.version, '2.3.1', 'package.json 版本号应更新到 2.3.1')
 }
 
 async function testProgressLineWiredInIndex() {
