@@ -2489,6 +2489,29 @@ exports.apply = (ctx, config = {}) => {
       return ok ? `语录重载成功！共 ${quotesLoader.count} 条语录，${quotesLoader.categoryNames.length} 个分类。` : '语录重载失败。'
     })
 
+  ctx.command('酒狐缓存清理', '清理 WineFox 图片渲染缓存（仅内存）', { authority: 3 })
+    .action(() => {
+      const status = renderCache?.getStatus?.()
+      const beforeSize = status?.size ?? 0
+      const cleared = renderCache?.clear?.() ?? 0
+      const afterStatus = renderCache?.getStatus?.()
+      const afterSize = afterStatus?.size ?? 0
+      const enabled = afterStatus?.enabled === true
+
+      return [
+        '酒狐悄悄话: 已清理「图片渲染缓存」（RenderCache · 内存缓存）。',
+        '',
+        `- 清理前条目: ${beforeSize}`,
+        `- 实际清理条目: ${cleared}`,
+        `- 清理后条目: ${afterSize}`,
+        '',
+        '说明：',
+        '- 这里清理的是 WineFox-Daily 的“图片卡片渲染结果缓存”（内存 LRU），用于加速帮助/分类/总数/故事目录等低变化卡片的重复渲染。',
+        '- 不会删除 `memory/*.json` 存档文件，也不会影响语录库/背包/好感等业务数据。',
+        enabled ? '' : '提示：当前 `imageCacheEnabled=false`，缓存处于关闭状态，清理后仅会把内存清空，不会改变当前输出行为。',
+      ].filter(Boolean).join('\n')
+    })
+
   ctx.command('酒狐诊断', '查看酒狐运行状态与存档健康', { authority: 3 })
     .option('image', '-i 输出图片卡片')
     .action(async ({ options }) => {
