@@ -1730,7 +1730,7 @@ exports.apply = (ctx, config = {}) => {
       const result = await brewing.openBottle(session.userId)
       if (result.success) {
         await affinity.addBonusPoints(session.userId, result.reward)
-        const ticketMap = { '普通': 1, '优良': 2, '极品': 4, '稀有': 7, '传说': 12 }
+        const ticketMap = { '普通': 3, '优良': 8, '极品': 15, '稀有': 25, '传说': 50 }
         const ticketReward = ticketMap[result.quality] || 0
         const ticketResult = await affinity.addTickets(session.userId, ticketReward)
         await trackAndNotify(session, 'brew')
