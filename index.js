@@ -97,7 +97,6 @@ const dailyFree = require('./lib/daily-free')
 const UIThemeSystem = require('./lib/ui-theme')
 const TicketRewardLedger = require('./lib/ticket-reward-ledger')
 const { createAsyncLimiter } = require('./lib/async-limiter')
-const PrefsSystem = require('./lib/prefs')
 const RenderCache = require('./lib/render-cache')
 const RenderMetricsBuffer = require('./lib/render-metrics')
 const {
@@ -207,7 +206,6 @@ exports.apply = (ctx, config = {}) => {
   const logger = ctx.logger('fox')
   let imageRenderLimiter = null
   let renderCache = null
-  let prefs = null
   let renderMetrics = null
   let pluginVersion = 'unknown'
   try {
@@ -244,9 +242,8 @@ exports.apply = (ctx, config = {}) => {
     const startedAt = Date.now()
     const puppeteerAvailable = hasPuppeteer(ctx)
     const globalTheme = getActiveCardThemeInfo()
-    const resolvedThemeId = prefs ? prefs.resolveThemeId(session, globalTheme.id) : globalTheme.id
-    const forceText = prefs ? prefs.resolveForceText(session) : false
-    const effectiveImageEnabled = !!imageEnabled && !forceText
+    const resolvedThemeId = globalTheme.id
+    const effectiveImageEnabled = !!imageEnabled
     const queueEnabled = !!imageRenderLimiter?.getStatus?.().enabled
 
     const recordMetric = (metric) => {
@@ -262,7 +259,7 @@ exports.apply = (ctx, config = {}) => {
       })
     }
 
-    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: resolvedThemeId, forceText }
+    const checkOptions = { [imageKey]: !!imageEnabled, puppeteerAvailable, theme: resolvedThemeId }
     for (const check of extraChecks) {
       checkOptions[check.key] = check.value
     }
@@ -270,7 +267,7 @@ exports.apply = (ctx, config = {}) => {
     logImageCheck(feature, checkOptions)
 
     if (!effectiveImageEnabled) {
-      const reason = forceText ? 'force_text' : `${imageKey}_disabled`
+      const reason = `${imageKey}_disabled`
       logger.info(`[fox] ${feature}回退文字输出 reason=${reason}${formatLogDetail(detail)}`)
       recordMetric({ ok: true, reason, cacheHit: false, waitMs: 0, renderMs: 0, totalMs: Date.now() - startedAt })
       return textOutput
@@ -482,8 +479,6 @@ exports.apply = (ctx, config = {}) => {
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
   if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true })
 
-  prefs = new PrefsSystem(memoryDir, logger)
-
   // ===== 初始化各子系统 =====
   const quotesLoader = new QuotesLoader([quotesPath, quotesExtraPath, quotesExtraLovePath, quotesExtraFunPath, quotesExtraDarkPath, quotesExtraThemedPath], logger)
   const affinity = new AffinitySystem(memoryDir, logger, { dailyAffinityMax: finalConfig.dailyAffinityMax })
@@ -657,11 +652,8 @@ exports.apply = (ctx, config = {}) => {
     getPassiveChanceBonus(userId) {
       return shop.getEquippedBonus(userId, 'passive_chance_bonus')
     },
-    isPassiveKeywordAllowed(session) {
-      if (!prefs) return true
-      const guildEnabled = prefs.resolvePassiveKeywordEnabled(session, finalConfig.enablePassiveKeyword)
-      const userAllowed = prefs.isUserAllowedToTriggerPassiveKeyword(session)
-      return guildEnabled && userAllowed
+    isPassiveKeywordAllowed() {
+      return finalConfig.enablePassiveKeyword !== false
     },
   })
   registerAnalyticsCommands(ctx, affinity, getTodayPassiveCount, { hasPuppeteer, renderAnalyticsCard, renderImageFeature, finalConfig, logger })
@@ -801,18 +793,6 @@ exports.apply = (ctx, config = {}) => {
             ['酒狐背包', '查看背包'],
             ['酒狐装备 <物品>', '装备物品'],
             ['酒狐使用 <物品>', '使用消耗品'],
-          ],
-        },
-        {
-          title: '偏好与群设置',
-          weightBias: -6,
-          compact: true,
-          items: [
-            ['酒狐偏好', '个人偏好（主题/强制文字/被动触发）'],
-            ['酒狐偏好 主题 <主题名>', '设置个人主题（优先级最高）'],
-            ['酒狐偏好 文字 <开/关>', '个人强制文字（禁用图片）'],
-            ['酒狐群设置', '本群偏好（管理员）'],
-            ['酒狐群设置 主题/文字/被动 ...', '设置本群主题/强制文字/被动冒泡'],
           ],
         },
         {
@@ -2470,226 +2450,6 @@ exports.apply = (ctx, config = {}) => {
       })
     })
 
-  // ===== 酒狐偏好 / 群设置 =====
-  function parseToggleInput(value) {
-    const normalized = String(value || '').trim()
-    if (!normalized) return { kind: 'query' }
-
-    const onWords = new Set(['开', '开启', '启用', 'on', 'true', '1', 'yes', 'y'])
-    const offWords = new Set(['关', '关闭', '禁用', 'off', 'false', '0', 'no', 'n'])
-    const clearWords = new Set(['默认', '清除', '取消', 'reset', 'unset', 'none'])
-
-    if (onWords.has(normalized)) return { kind: 'set', value: true }
-    if (offWords.has(normalized)) return { kind: 'set', value: false }
-    if (clearWords.has(normalized)) return { kind: 'clear', value: null }
-    return { kind: 'invalid', value: normalized }
-  }
-
-  ctx.command('酒狐偏好', '查看个人偏好设置')
-    .action(({ session }) => {
-      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
-    })
-
-  ctx.command('酒狐偏好.文字 [value:text]', '强制文字输出（开/关/默认）')
-    .action(async ({ session }, value) => {
-      const parsed = parseToggleInput(value)
-      if (parsed.kind === 'query') {
-        return [
-          '== 酒狐偏好 · 文字 ==',
-          '',
-          '用法：',
-          '- 酒狐偏好 文字 开    # 强制文字（禁用图片）',
-          '- 酒狐偏好 文字 关    # 允许图片（按各指令配置）',
-          '- 酒狐偏好 文字 默认  # 清除个人设置，交给群/全局配置',
-        ].join('\n')
-      }
-      if (parsed.kind === 'invalid') {
-        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
-      }
-
-      const patch = parsed.kind === 'clear' ? { forceText: null } : { forceText: parsed.value }
-      await prefs.setUserPrefs(session, patch)
-      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
-    })
-
-  ctx.command('酒狐偏好.被动 [value:text]', '控制“我的发言触发被动冒泡”（开/关/默认）')
-    .action(async ({ session }, value) => {
-      const parsed = parseToggleInput(value)
-      if (parsed.kind === 'query') {
-        return [
-          '== 酒狐偏好 · 被动 ==',
-          '',
-          '说明：这里只控制“你的消息是否允许触发关键词被动冒泡”。',
-          '用法：',
-          '- 酒狐偏好 被动 开    # 允许你的消息触发（默认）',
-          '- 酒狐偏好 被动 关    # 禁用你的消息触发',
-          '- 酒狐偏好 被动 默认  # 清除个人设置',
-        ].join('\n')
-      }
-      if (parsed.kind === 'invalid') {
-        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
-      }
-
-      // disablePassiveKeywordTrigger: true = 不允许触发
-      const patch = parsed.kind === 'clear'
-        ? { disablePassiveKeywordTrigger: null }
-        : { disablePassiveKeywordTrigger: parsed.value ? false : true }
-      await prefs.setUserPrefs(session, patch)
-      return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
-    })
-
-  ctx.command('酒狐偏好.主题 [theme:text]', '设置个人图片主题（会覆盖全局/群主题）')
-    .action(async ({ session }, theme) => {
-      const themes = listCardThemes()
-
-      if (!theme || !theme.trim()) {
-        const resolvedThemeId = prefs.resolveThemeId(session, getActiveCardThemeInfo().id)
-        const resolvedTheme = resolveCardTheme(resolvedThemeId) || getActiveCardThemeInfo()
-        const lines = [
-          '== 酒狐偏好 · 主题 ==',
-          '',
-          `当前生效主题: ${resolvedTheme.name} (${resolvedTheme.id})`,
-          '',
-          '可用主题:',
-          ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
-          '',
-          '用法：',
-          '- 酒狐偏好 主题 晴天玻璃',
-          '- 酒狐偏好 主题 cream-paper',
-          '- 酒狐偏好 主题 默认   # 清除个人主题，回退到群/全局主题',
-        ]
-        return lines.join('\n')
-      }
-
-      const parsed = parseToggleInput(theme)
-      if (parsed.kind === 'clear') {
-        await prefs.setUserPrefs(session, { themeId: null })
-        return prefs.formatPrefsSummary(session, getActiveCardThemeInfo().id)
-      }
-
-      const resolvedTheme = resolveCardTheme(theme)
-      if (!resolvedTheme) {
-        return [
-          `酒狐悄悄话: 没找到「${theme.trim()}」这个主题哦。`,
-          '',
-          '可用主题:',
-          ...themes.map(item => `- ${item.name} (${item.id})`),
-        ].join('\n')
-      }
-
-      await prefs.setUserPrefs(session, { themeId: resolvedTheme.id })
-      return `酒狐悄悄话: 已将你的个人主题设置为「${resolvedTheme.name}」(${resolvedTheme.id})。\n（可用「酒狐偏好」查看当前生效设置）`
-    })
-
-  ctx.command('酒狐群设置', '查看本群酒狐设置（仅管理员）', { authority: 3 })
-    .action(({ session }) => {
-      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中查看群设置哦。'
-      const guildPrefs = prefs.getGuildPrefs(session)
-      const globalTheme = getActiveCardThemeInfo()
-      const guildTheme = guildPrefs.themeId ? resolveCardTheme(guildPrefs.themeId) : null
-      const effectiveTheme = guildTheme || globalTheme
-
-      return [
-        '== 酒狐群设置 ==',
-        '',
-        `全局主题: ${globalTheme.name} (${globalTheme.id})`,
-        `群主题: ${guildTheme ? `${guildTheme.name} (${guildTheme.id})` : '(未设置)'}`,
-        `本群生效主题: ${effectiveTheme.name} (${effectiveTheme.id})`,
-        '',
-        `群文字强制: ${guildPrefs.forceText === undefined ? '(未设置)' : String(guildPrefs.forceText)}`,
-        `群被动冒泡: ${guildPrefs.passiveKeywordEnabled === undefined ? '(未设置)' : String(guildPrefs.passiveKeywordEnabled)}`,
-        '',
-        '提示：个人偏好仍可覆盖群设置（优先级：个人 > 群 > 全局）。',
-      ].join('\n')
-    })
-
-  ctx.command('酒狐群设置.文字 [value:text]', '本群强制文字输出（开/关/默认）', { authority: 3 })
-    .action(async ({ session }, value) => {
-      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群偏好哦。'
-      const parsed = parseToggleInput(value)
-      if (parsed.kind === 'query') {
-        return [
-          '== 酒狐群设置 · 文字 ==',
-          '',
-          '用法：',
-          '- 酒狐群设置 文字 开    # 本群强制文字（禁用图片）',
-          '- 酒狐群设置 文字 关    # 本群允许图片（按各指令配置）',
-          '- 酒狐群设置 文字 默认  # 清除群设置，回退到全局配置',
-        ].join('\n')
-      }
-      if (parsed.kind === 'invalid') {
-        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
-      }
-      const patch = parsed.kind === 'clear' ? { forceText: null } : { forceText: parsed.value }
-      await prefs.setGuildPrefs(session, patch)
-      return '酒狐悄悄话: 本群文字/图片偏好已更新。\n（可用「酒狐群设置」查看当前设置）'
-    })
-
-  ctx.command('酒狐群设置.被动 [value:text]', '本群关键词被动冒泡（开/关/默认）', { authority: 3 })
-    .action(async ({ session }, value) => {
-      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群偏好哦。'
-      const parsed = parseToggleInput(value)
-      if (parsed.kind === 'query') {
-        return [
-          '== 酒狐群设置 · 被动 ==',
-          '',
-          '用法：',
-          '- 酒狐群设置 被动 开    # 本群开启关键词被动冒泡',
-          '- 酒狐群设置 被动 关    # 本群关闭关键词被动冒泡',
-          '- 酒狐群设置 被动 默认  # 清除群设置，回退到全局配置',
-        ].join('\n')
-      }
-      if (parsed.kind === 'invalid') {
-        return `酒狐悄悄话: 不认识「${parsed.value}」这个参数哦，请用 开/关/默认。`
-      }
-      const patch = parsed.kind === 'clear' ? { passiveKeywordEnabled: null } : { passiveKeywordEnabled: parsed.value }
-      await prefs.setGuildPrefs(session, patch)
-      return '酒狐悄悄话: 本群被动冒泡开关已更新。\n（可用「酒狐群设置」查看当前设置）'
-    })
-
-  ctx.command('酒狐群设置.主题 [theme:text]', '设置本群图片主题（仅管理员）', { authority: 3 })
-    .action(async ({ session }, theme) => {
-      if (!session.guildId) return '酒狐悄悄话: 只能在群聊中设置群主题哦。'
-      const themes = listCardThemes()
-
-      if (!theme || !theme.trim()) {
-        const resolvedThemeId = prefs.resolveThemeId(session, getActiveCardThemeInfo().id)
-        const resolvedTheme = resolveCardTheme(resolvedThemeId) || getActiveCardThemeInfo()
-        const lines = [
-          '== 酒狐群设置 · 主题 ==',
-          '',
-          `当前生效主题: ${resolvedTheme.name} (${resolvedTheme.id})`,
-          '',
-          '可用主题:',
-          ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
-          '',
-          '用法：',
-          '- 酒狐群设置 主题 晨光咖啡馆',
-          '- 酒狐群设置 主题 默认   # 清除群主题，回退到全局主题',
-        ]
-        return lines.join('\n')
-      }
-
-      const parsed = parseToggleInput(theme)
-      if (parsed.kind === 'clear') {
-        await prefs.setGuildPrefs(session, { themeId: null })
-        return '酒狐悄悄话: 已清除本群主题设置，将回退到全局主题。'
-      }
-
-      const resolvedTheme = resolveCardTheme(theme)
-      if (!resolvedTheme) {
-        return [
-          `酒狐悄悄话: 没找到「${theme.trim()}」这个主题哦。`,
-          '',
-          '可用主题:',
-          ...themes.map(item => `- ${item.name} (${item.id})`),
-        ].join('\n')
-      }
-
-      await prefs.setGuildPrefs(session, { themeId: resolvedTheme.id })
-      return `酒狐悄悄话: 本群主题已设置为「${resolvedTheme.name}」(${resolvedTheme.id})。`
-    })
-
   // ===== 酒狐UI =====
   ctx.command('酒狐UI [theme:text]', '查看或切换图片主题', { authority: 3 })
     .action(async (_, theme) => {
@@ -2707,7 +2467,6 @@ exports.apply = (ctx, config = {}) => {
           ...themes.map((item, index) => `${index + 1}. ${item.name} (${item.id}) - ${item.description}`),
           '',
           '使用「酒狐UI 主题名」切换，例如：酒狐UI 晴天玻璃',
-          '提示：你也可以用「酒狐偏好 主题」设置个人主题，或用「酒狐群设置 主题」设置群主题（优先级：个人 > 群 > 全局）。',
         ].filter(Boolean)
         return lines.join('\n')
       }
@@ -3026,7 +2785,6 @@ exports.apply = (ctx, config = {}) => {
       ['背包', path.join(memoryDir, 'inventory.json')],
       ['委托', path.join(memoryDir, 'commission.json')],
       ['收藏', path.join(memoryDir, 'favorites.json')],
-      ['偏好设置', path.join(memoryDir, 'prefs.json')],
       ['狐狐券账本', path.join(memoryDir, 'ticket-reward-ledger.json')],
       ['签到', path.join(memoryDir, 'checkin.json')],
       ['酿酒', path.join(memoryDir, 'brewing.json')],
