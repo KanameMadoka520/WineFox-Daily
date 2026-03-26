@@ -10,6 +10,7 @@
 
 - 扩充 `data/` 中的语录、故事、天气、问答、商店文案
 - 继续补齐图片卡片或继续优化现有卡片比例
+- 优化帮助卡、商店卡、故事卡在手机 QQ 内的阅读效率
 - 围绕季节系统继续补世界状态联动、卡片状态头和轻量运营玩法
 - 优化宿主联调体验和图片性能
 - 修复业务逻辑与文案不一致的问题
@@ -118,6 +119,7 @@ WineFox-Daily/
 - 指令接线统一通过 `renderImageFeature()`
 - 图片失败自动回退文字
 - 后台要保留条件检查 / 渲染开始 / 渲染成功 / 回退原因日志
+- `酒狐帮助` 默认按聊天窗口阅读场景维护，优先保证手机 QQ 中的可扫读性，不要回退成“桌面宽海报”
 
 如果你新增图片卡片，建议遵循下面步骤：
 
@@ -126,6 +128,12 @@ WineFox-Daily/
 3. 在 `index.js` 中通过 `renderImageFeature()` 接线
 4. 在 `exports.Config` 和 `runtime_config.js` 中补对应 `imageXxx` 开关
 5. 若需要，补测试到 `test/phase8.test.js` 或新测试文件
+
+如果你改的是帮助菜单或指令文档，请额外检查：
+
+1. `酒狐帮助` 的图片版和文字版是否都还可读
+2. `README.md` / `HANDOFF.md` 是否同步更新
+3. `test/help-sync.test.js` 是否仍然通过
 
 ### 缓存与运维工具约定（v2.3.1+）
 
@@ -215,6 +223,9 @@ WineFox-Daily/
 - `test/phase6.test.js`
 - `test/phase7.test.js`
 - `test/phase8.test.js`
+- `test/dynamic-shop.test.js`
+- `test/player-backup-cleanup.test.js`
+- `test/help-sync.test.js`
 - `test/ui-theme.test.js`
 - `test/season-cycle.test.js`
 - `test/weather-season.test.js`
@@ -230,6 +241,9 @@ node test/phase5.test.js
 node test/phase6.test.js
 node test/phase7.test.js
 node test/phase8.test.js
+node test/dynamic-shop.test.js
+node test/player-backup-cleanup.test.js
+node test/help-sync.test.js
 node test/ui-theme.test.js
 node test/season-cycle.test.js
 node test/weather-season.test.js
@@ -246,6 +260,13 @@ node test/season-fortune-mood.test.js
 - `酒狐故事`
 - `酒狐委托`
 - `酒狐UI`
+
+如果你改了运维或文档同步相关逻辑，还应额外检查：
+
+- `酒狐渲染诊断`
+- `酒狐渲染统计`
+- `酒狐存档备份` / `酒狐存档列表` / `酒狐存档清理`
+- `README.md` / `HANDOFF.md` 与帮助菜单是否一致
 
 ---
 

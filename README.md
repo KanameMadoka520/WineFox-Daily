@@ -23,7 +23,7 @@
 | **循环季节** | 独立季节系统，不按现实月份，按更快节奏自动轮换，并影响天气、主语录、每日酒狐、故事、占卜与心情调性 |
 | **稀有语录** | 稀有语录库已补齐，并支持主指令 / 占卜 / 天气等特殊掉落 |
 | **收藏 / 搜索 / 统计** | 收藏夹、分类浏览、关键词搜索、互动统计 |
-| **图片卡片输出** | 多数高信息量指令优先输出图片，失败自动回退文字；帮助卡会展示当前季节/天气状态块 |
+| **图片卡片输出** | 多数高信息量指令优先输出图片，失败自动回退文字；帮助卡已按聊天窗口场景做紧凑多列布局 |
 | **主题切换** | `酒狐UI` 支持切换卡片主题（奶油纸张 / 晴天玻璃 / 晨光咖啡馆 / 暖笺物语） |
 
 ---
@@ -89,6 +89,7 @@
 - 插件会优先尝试图片输出
 - 若宿主未启用 Puppeteer 服务，或渲染失败，会自动回退为文字
 - 后台已补充统一诊断日志，便于排查图片渲染问题
+- `酒狐帮助` 当前已针对手机端聊天阅读做过两轮压缩，结构为轻量状态条 + 紧凑多列命令区 + 独立管理员区
 
 ---
 
@@ -434,17 +435,49 @@ WineFox 会在插件目录下创建备份目录：
 
 ---
 
+## 测试现状
+
+当前仓库内主要测试文件包括：
+
+- `test/phase3.test.js`
+- `test/phase4.test.js`
+- `test/phase5.test.js`
+- `test/phase6.test.js`
+- `test/phase7.test.js`
+- `test/phase8.test.js`
+- `test/dynamic-shop.test.js`
+- `test/player-backup-cleanup.test.js`
+- `test/help-sync.test.js`
+- `test/ui-theme.test.js`
+- `test/season-cycle.test.js`
+- `test/weather-season.test.js`
+- `test/seasonal-content.test.js`
+- `test/season-fortune-mood.test.js`
+
+其中：
+
+- `test/help-sync.test.js` 用于约束帮助菜单、README、HANDOFF 中的关键命令同步
+- `test/player-backup-cleanup.test.js` 用于覆盖存档备份清理与 dry-run 行为
+- `test/dynamic-shop.test.js` 用于覆盖动态商店轮换与购买边界
+
+---
+
 ## 项目结构
 
-```
+```text
 WineFox-Daily/
 ├── index.js
 ├── package.json
 ├── runtime_config.js
-├── lib/               # 29 个功能模块（含 ticket-reward-ledger / ui-theme / card-renderer）
-├── data/              # 14 个文案 / 数据文件
-├── memory/            # 运行时存档
-└── test/              # phase3~8 + ui-theme
+├── README.md
+├── CONTRIBUTING.md
+├── HANDOFF.md
+├── docs/              # 设计稿 / 计划文档
+├── lib/               # 功能模块、渲染器、缓存与运维工具
+├── data/              # 语录、故事、题库、主题、商店与季节数据
+├── memory/            # 运行时存档（自动生成，不提交）
+├── player_backups/    # 玩家存档备份目录（运行时生成，不提交）
+└── test/              # 业务测试、同步检查、主题与季节测试
 ```
 
 详细状态与交接说明见 [HANDOFF.md](./HANDOFF.md)。  
