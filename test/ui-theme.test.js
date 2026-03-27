@@ -9,11 +9,13 @@ async function testThemeResolution() {
   assert.ok(resolveCardTheme('咖啡馆'), '应支持按别名解析')
   assert.ok(resolveCardTheme('wedog'), '应支持按 WeDog 主题别名解析')
   assert.ok(resolveCardTheme('拟态玻璃'), '应支持按玻璃主题别名解析')
+  assert.ok(resolveCardTheme('琥珀'), '应支持按暖玻璃主题别名解析')
   assert.strictEqual(resolveCardTheme('不存在的主题'), null, '不存在的主题应返回 null')
   assert.ok(getCardThemeById('cream-paper'), '应能按 id 获取主题')
   assert.ok(getCardThemeById('wedog-letter'), '应能获取新增的 WeDog 灵感主题')
   assert.ok(getCardThemeById('prism-glass'), '应能获取新增的棱镜玻璃主题')
-  assert.strictEqual(listCardThemes().length >= 5, true, '应至少提供 5 个主题')
+  assert.ok(getCardThemeById('amber-glass'), '应能获取新增的琥珀玻璃主题')
+  assert.strictEqual(listCardThemes().length >= 6, true, '应至少提供 6 个主题')
 }
 
 async function testThemePersistence() {
