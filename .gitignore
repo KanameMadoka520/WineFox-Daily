@@ -12,3 +12,4 @@ Thumbs.db
 .idea/
 /2025*.txt
 .worktrees/
+.gitignore
